@@ -4,9 +4,9 @@ name: Release
 #   npm version patch        # bumps package.json + creates a v* tag
 #   git push --follow-tags
 #
-# Installers are always uploaded as workflow artifacts (download from the run).
-# If the RELEASES_TOKEN secret is set, they are ALSO published to the public
-# releases repo, which is what powers in-app auto-update.
+# Build and publish are separate steps: installers always upload as artifacts
+# (download from the run), and on a tag they're also published to this repo's
+# Releases — which powers in-app auto-update.
 on:
   push:
     tags: ['v*']
@@ -16,7 +16,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     permissions:
-      contents: write # let the built-in token publish to this repo's Releases
+      contents: write # let the built-in token create the Release
     strategy:
       fail-fast: false
       matrix:
@@ -42,23 +42,14 @@ jobs:
       - name: Build bundles
         run: npm run build
 
-      - name: Package${{ matrix.build_args }}
+      - name: Build installers
         shell: bash
         env:
-          # Built-in token — publishes to THIS repo's Releases. Make the repo
-          # public so the installed app reads updates with no token of its own.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Optional Apple Developer signing (required for macOS auto-update).
           # Safe to leave unset — the build still produces an installable .dmg.
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            npx electron-builder ${{ matrix.build_args }} --publish always
-          else
-            echo "Not a tag — building without publishing."
-            npx electron-builder ${{ matrix.build_args }} --publish never
-          fi
+        run: npx electron-builder ${{ matrix.build_args }} --publish never
 
       - name: Upload installers as artifacts
         uses: actions/upload-artifact@v4
@@ -68,6 +59,18 @@ jobs:
             dist/*.exe
             dist/*.dmg
             dist/*.zip
-            dist/*.yml
+            dist/latest*.yml
             dist/*.blockmap
           if-no-files-found: warn
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/latest*.yml
+            dist/*.blockmap
+          fail_on_unmatched_files: false
