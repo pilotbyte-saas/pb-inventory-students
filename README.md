@@ -1,5 +1,7 @@
 # Classroom Inventory
 
+[![CI](https://github.com/pilotbyte-saas/pb-inventory-students/actions/workflows/ci.yml/badge.svg)](https://github.com/pilotbyte-saas/pb-inventory-students/actions/workflows/ci.yml)
+
 A single-device, local-first Electron app for tracking classroom consumables
 (name tags, pens, t-shirts, …). It reads and writes a local JSON cache instantly
 and syncs to a **Google Sheet** whenever it is connected. Losing connection is a
