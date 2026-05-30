@@ -44,11 +44,10 @@ jobs:
 
       - name: Build installers
         shell: bash
-        env:
-          # Optional Apple Developer signing (required for macOS auto-update).
-          # Safe to leave unset — the build still produces an installable .dmg.
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        # Unsigned builds. To enable macOS code signing later (needed for mac
+        # auto-update), add a signing step that exports CSC_LINK /
+        # CSC_KEY_PASSWORD ONLY when the secrets are non-empty — passing an empty
+        # CSC_LINK makes electron-builder fail resolving the cert path.
         run: npx electron-builder ${{ matrix.build_args }} --publish never
 
       - name: Upload installers as artifacts
