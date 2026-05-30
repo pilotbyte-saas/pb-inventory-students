@@ -1,6 +1,6 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { readFileSync } from 'node:fs'
-import type { CredentialInfo, Item, NewItemInput, TransactionFilter } from '@shared/types'
+import type { AwsConfig, Item, NewItemInput, SyncBackend, TransactionFilter } from '@shared/types'
 import * as inventory from './inventory'
 import * as config from './config'
 import * as manager from './sync/manager'
@@ -36,6 +36,11 @@ export function registerIpc(): void {
   ipcMain.handle('sync:test', () => manager.testConnection())
 
   ipcMain.handle('cred:has', () => config.hasCredentials())
+  ipcMain.handle('cred:info', () => config.getBackendInfo())
+  ipcMain.handle('cred:setBackend', (_e, backend: SyncBackend) => {
+    config.setBackend(backend)
+    manager.reconfigure()
+  })
   ipcMain.handle('cred:set', (_e, jsonKey: string) => {
     config.setCredentials(jsonKey)
     manager.reconfigure()
@@ -44,14 +49,9 @@ export function registerIpc(): void {
     config.setSpreadsheetId(id)
     manager.reconfigure()
   })
-  ipcMain.handle('cred:info', (): CredentialInfo => {
-    return {
-      hasKey: config.hasKeyStored(),
-      hasSpreadsheet: !!config.getSpreadsheetId(),
-      clientEmail: config.getClientEmail(),
-      spreadsheetId: config.getSpreadsheetId(),
-      encryptionAvailable: config.encryptionAvailable()
-    }
+  ipcMain.handle('cred:setAws', (_e, cfg: AwsConfig) => {
+    config.setAwsConfig(cfg)
+    manager.reconfigure()
   })
   ipcMain.handle('cred:pickKey', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? undefined

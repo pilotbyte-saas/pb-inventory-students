@@ -64,12 +64,31 @@ export interface TransactionFilter {
   to?: string // 'YYYY-MM-DD'
 }
 
-export interface CredentialInfo {
-  hasKey: boolean
-  hasSpreadsheet: boolean
-  clientEmail: string | null
-  spreadsheetId: string | null
+export type SyncBackend = 'sheets' | 'dynamodb'
+
+export interface AwsConfig {
+  accessKeyId: string
+  secretAccessKey: string
+  region: string
+  tableName: string
+}
+
+// Everything the Settings screen needs to render either backend's status.
+// No secrets are included — only whether they are present.
+export interface BackendInfo {
+  backend: SyncBackend
   encryptionAvailable: boolean
+  sheets: {
+    hasKey: boolean
+    clientEmail: string | null
+    spreadsheetId: string | null
+  }
+  aws: {
+    hasSecret: boolean
+    accessKeyId: string | null
+    region: string | null
+    tableName: string | null
+  }
 }
 
 // The surface exposed on `window.api` by the preload bridge.
@@ -92,9 +111,11 @@ export interface IpcApi {
   syncNow(): Promise<void>
   testConnection(): Promise<{ ok: boolean; error?: string }>
   hasCredentials(): Promise<boolean>
+  getBackendInfo(): Promise<BackendInfo>
+  setBackend(backend: SyncBackend): Promise<void>
   setCredentials(jsonKey: string): Promise<void>
   setSpreadsheetId(id: string): Promise<void>
-  getCredentialInfo(): Promise<CredentialInfo>
+  setAwsConfig(config: AwsConfig): Promise<void>
   pickKeyFile(): Promise<{ ok: boolean; clientEmail?: string | null; error?: string }>
   openExternal(url: string): Promise<void>
   // Subscribe to push updates of sync status. Returns an unsubscribe function.

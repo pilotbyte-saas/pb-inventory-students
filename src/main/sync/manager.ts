@@ -3,6 +3,7 @@ import * as config from '../config'
 import * as cache from '../cache'
 import * as queue from '../queue'
 import { GoogleSheetsAdapter } from './sheets'
+import { DynamoDbAdapter } from './dynamodb'
 import type { SyncAdapter } from './SyncAdapter'
 
 const UNCONFIGURED_MSG = 'Not configured — add your key and spreadsheet ID in Settings.'
@@ -43,6 +44,32 @@ function friendlyError(err: unknown): string {
   ) {
     return 'The service account key looks malformed (or the system clock is wrong). Re-download the JSON key from Google Cloud and load it again in Settings.'
   }
+  // AWS DynamoDB
+  if (
+    lc.includes('unrecognizedclient') ||
+    lc.includes('invalidsignature') ||
+    lc.includes('security token') ||
+    lc.includes('signaturedoesnotmatch')
+  ) {
+    return 'AWS rejected the credentials. Double-check the Access Key ID and Secret Access Key in Settings.'
+  }
+  if (
+    lc.includes('accessdenied') ||
+    lc.includes('not authorized') ||
+    lc.includes('is not authorized to perform')
+  ) {
+    return 'AWS denied the request. The IAM user needs DynamoDB permissions (DescribeTable, CreateTable, Query, PutItem) on the table.'
+  }
+  if (lc.includes('resourcenotfound')) {
+    return 'The DynamoDB table was not found and could not be created. Create it manually or grant CreateTable permission.'
+  }
+  if (
+    lc.includes('could not load credentials') ||
+    lc.includes('credential is missing') ||
+    lc.includes('resolve credentials')
+  ) {
+    return 'AWS credentials are missing. Enter your Access Key ID and Secret Access Key in Settings.'
+  }
   if (
     lc.includes('enotfound') ||
     lc.includes('eai_again') ||
@@ -51,7 +78,7 @@ function friendlyError(err: unknown): string {
     lc.includes('network') ||
     lc.includes('socket')
   ) {
-    return 'Network problem reaching Google. Check your internet connection and press Sync now.'
+    return 'Network problem reaching the server. Check your internet connection and press Sync now.'
   }
   return raw
 }
@@ -87,11 +114,24 @@ function setState(next: SyncState, msg?: string): void {
 }
 
 function buildAdapter(): SyncAdapter | null {
-  if (!config.hasCredentials()) {
-    adapter = null
-    adapterSig = ''
-    return null
+  const backend = config.getBackend()
+
+  if (backend === 'dynamodb') {
+    const aws = config.getFullAwsConfig()
+    if (!aws) {
+      adapter = null
+      adapterSig = ''
+      return null
+    }
+    const sig = `dynamodb:${aws.region}:${aws.tableName}:${aws.accessKeyId}`
+    if (!adapter || adapterSig !== sig) {
+      adapter = new DynamoDbAdapter(aws)
+      adapterSig = sig
+    }
+    return adapter
   }
+
+  // Default: Google Sheets
   const keyJson = config.getKeyJson()
   const spreadsheetId = config.getSpreadsheetId()
   if (!keyJson || !spreadsheetId) {
@@ -99,7 +139,7 @@ function buildAdapter(): SyncAdapter | null {
     adapterSig = ''
     return null
   }
-  const sig = `${spreadsheetId}:${keyJson.length}`
+  const sig = `sheets:${spreadsheetId}:${keyJson.length}`
   if (!adapter || adapterSig !== sig) {
     adapter = new GoogleSheetsAdapter(keyJson, spreadsheetId)
     adapterSig = sig
@@ -107,16 +147,15 @@ function buildAdapter(): SyncAdapter | null {
   return adapter
 }
 
-function mergeItems(sheetItems: Item[], localItems: Item[], dirty: boolean): Item[] {
+// Merge by newest updatedAt per id; the union keeps items present on only one
+// side. This is what lets multiple devices converge — whoever edited an item
+// most recently wins for that item, independent of edits to other items.
+function mergeItems(remoteItems: Item[], localItems: Item[]): Item[] {
   const map = new Map<string, Item>()
-  if (dirty) {
-    // Local edits win; keep anything that exists only in the Sheet.
-    for (const it of sheetItems) map.set(it.id, it)
-    for (const it of localItems) map.set(it.id, it)
-  } else {
-    // No pending local changes: the Sheet is the source of truth.
-    for (const it of localItems) map.set(it.id, it)
-    for (const it of sheetItems) map.set(it.id, it)
+  for (const it of remoteItems) map.set(it.id, it)
+  for (const it of localItems) {
+    const existing = map.get(it.id)
+    if (!existing || it.updatedAt >= existing.updatedAt) map.set(it.id, it)
   }
   return [...map.values()]
 }
@@ -146,7 +185,7 @@ export async function sync(): Promise<void> {
     const dirty = queue.isItemsDirty()
     const dirtyVersion = queue.getItemsVersion()
     const pending = queue.getPendingTransactions()
-    const merged = mergeItems(pulled.items, cache.readItems(), dirty)
+    const merged = mergeItems(pulled.items, cache.readItems())
 
     // Push: transactions are append-only; items are a full snapshot rewrite.
     if (pending.length) {
@@ -160,7 +199,7 @@ export async function sync(): Promise<void> {
 
     // Write the cache from the freshest local state so edits made mid-sync
     // are preserved, then fold in anything the Sheet had.
-    cache.writeItems(mergeItems(pulled.items, cache.readItems(), queue.isItemsDirty()))
+    cache.writeItems(mergeItems(pulled.items, cache.readItems()))
     cache.writeTransactions(
       dedupeAndSort([...pulled.transactions, ...pending, ...queue.getPendingTransactions()])
     )

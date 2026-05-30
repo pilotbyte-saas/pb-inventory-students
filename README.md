@@ -8,7 +8,8 @@ and syncs to a **Google Sheet** whenever it is connected. Losing connection is a
 non-event: changes queue locally and flush on reconnect.
 
 - **Renderer:** React + Tailwind + Recharts
-- **Main:** googleapis (Sheets API v4), Electron `safeStorage` for the key
+- **Main:** pluggable sync backend — **Google Sheets** (googleapis) or **AWS
+  DynamoDB** (`@aws-sdk`) — with the credential encrypted via Electron `safeStorage`
 - **Cache:** plain JSON files in the app `userData` directory
 - **Build:** electron-vite (+ electron-builder, optional)
 
@@ -60,6 +61,43 @@ id | itemId | type | quantity | unitCost | totalCost | receiptRef | note | times
 
 ---
 
+## Using AWS DynamoDB (multiple devices)
+
+For a few devices sharing one live dataset, switch in **Settings → Sync backend →
+AWS DynamoDB**. Every device points at the same table; conflicts are resolved per
+item (newest edit wins) and transactions are append-only, so devices never
+clobber each other. The local-first cache and queue work exactly the same.
+
+1. In AWS **IAM**, create a user with programmatic access and attach a policy
+   scoped to your table (rename the table in the ARN if you change it):
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "dynamodb:DescribeTable",
+           "dynamodb:CreateTable",
+           "dynamodb:Query",
+           "dynamodb:PutItem"
+         ],
+         "Resource": "arn:aws:dynamodb:*:*:table/classroom-inventory"
+       }
+     ]
+   }
+   ```
+
+2. In **Settings**, enter the Access Key ID, Secret Access Key, region (e.g.
+   `us-east-1`), and table name (default `classroom-inventory`), then click
+   **Test connection**. The table is created automatically on first connect
+   (on-demand / pay-per-request billing — effectively pennies at this volume).
+
+Use the **same** access key + region + table name on each device.
+
+---
+
 ## Develop & run
 
 ```bash
@@ -83,17 +121,32 @@ you're ready.
 
 ## Connecting & troubleshooting sync
 
-1. **Settings → Load key file…** and pick the downloaded service-account `.json`.
-2. Paste the **spreadsheet ID**, then click **Test connection**. This does a real
-   round-trip to Google and creates the `Items`/`Transactions` tabs if missing.
-3. If it fails, the message tells you the fix. Common causes:
+Pick the backend in **Settings → Sync backend**, fill in its credentials, then
+click **Test connection** — it does a real round-trip and reports exactly what's
+wrong. Common causes:
+
+**Google Sheets**
 
 | Message | Fix |
 | --- | --- |
 | Permission denied | Share the Sheet with the service-account email (shown in Settings) as **Editor**. |
-| Sheets API not enabled | Enable **Google Sheets API** for this project in the Cloud Console. |
+| Sheets API not enabled | Enable **Google Sheets API** for the project in the Cloud Console. |
 | Spreadsheet not found | Re-check the ID — the part of the URL between `/d/` and `/edit`. |
-| Key looks malformed | Re-download the JSON key and load it as-is; don't reformat or edit it. |
+| Key looks malformed | Re-download the JSON key and load it as-is; don't reformat it. |
+
+**AWS DynamoDB**
+
+| Message | Fix |
+| --- | --- |
+| AWS rejected the credentials | Re-check the Access Key ID and Secret Access Key. |
+| AWS denied the request | Attach the IAM policy above (DescribeTable, CreateTable, Query, PutItem). |
+| Table not found / can't create | Grant `CreateTable`, or pre-create a table with keys `pk` (S) + `sk` (S). |
+
+You can also verify **Google** access from the terminal without launching the app:
+
+```bash
+npm run check:sheets -- "C:\path\to\key.json" "<spreadsheetId>"
+```
 
 ---
 
