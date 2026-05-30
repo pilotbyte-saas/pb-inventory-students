@@ -15,7 +15,8 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "build:win": "electron-vite build && electron-builder --win",
-    "build:dir": "electron-vite build && electron-builder --dir"
+    "build:dir": "electron-vite build && electron-builder --dir",
+    "check:sheets": "node scripts/check-sheets.mjs"
   },
   "dependencies": {
     "googleapis": "^144.0.0",
