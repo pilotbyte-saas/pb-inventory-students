@@ -1,0 +1,20 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <!-- isometric inventory box -->
+  <g stroke="#1e3a8a" stroke-width="16" stroke-linejoin="round">
+    <polygon points="512,236 760,372 512,508 264,372" fill="#ffffff"/>
+    <polygon points="264,372 512,508 512,792 264,656" fill="#dbeafe"/>
+    <polygon points="760,372 512,508 512,792 760,656" fill="#bfdbfe"/>
+    <path d="M512 508 L512 792" fill="none"/>
+  </g>
+  <!-- "tracked" check badge -->
+  <circle cx="732" cy="716" r="124" fill="#22c55e" stroke="#ffffff" stroke-width="28"/>
+  <path d="M676 716 l40 42 l78 -86" fill="none" stroke="#ffffff" stroke-width="34"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

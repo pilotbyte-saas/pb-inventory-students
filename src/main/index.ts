@@ -1,11 +1,14 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { registerIpc } from './ipc'
 import * as manager from './sync/manager'
+import { initAutoUpdate, setUpdateNotifier } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
+  const devIcon = join(app.getAppPath(), 'build', 'icon.png')
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -14,6 +17,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'Classroom Inventory',
+    icon: existsSync(devIcon) ? devIcon : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -31,6 +35,12 @@ function createWindow(): void {
     }
   })
 
+  setUpdateNotifier((status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update:status', status)
+    }
+  })
+
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
   if (rendererUrl) {
     mainWindow.loadURL(rendererUrl)
@@ -43,6 +53,7 @@ app.whenReady().then(() => {
   registerIpc()
   createWindow()
   manager.start() // initial pull + periodic sync
+  initAutoUpdate(() => mainWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -111,7 +111,9 @@ Other scripts:
 npm run typecheck    # tsc for main/preload and renderer
 npm run build        # bundle main, preload, renderer into out/
 npm run start        # preview the production bundle
-npm run build:win    # optional: produce a Windows installer (electron-builder)
+npm run build:win    # Windows installer (.exe)
+npm run build:mac    # macOS Apple Silicon (.dmg + .zip)
+npm run icons        # regenerate app icons from build/icon.svg
 ```
 
 The app works fully offline. Go to **Settings** to connect Google Sheets when
@@ -154,16 +156,50 @@ npm run check:sheets -- "C:\path\to\key.json" "<spreadsheetId>"
 
 - **CI** (`.github/workflows/ci.yml`): every push / PR to `main` runs typecheck
   and builds all three bundles.
-- **Release** (`.github/workflows/release.yml`): pushing a `v*` tag builds the
-  Windows installer with electron-builder and attaches it to a GitHub Release.
+- **Release** (`.github/workflows/release.yml`): pushing a `v*` tag builds
+  installers for **Windows** (NSIS `.exe`) and **macOS Apple Silicon**
+  (`.dmg` + `.zip`) on GitHub-hosted runners.
 
   ```bash
-  npm version patch        # bumps version in package.json and creates a v* tag
+  npm version patch        # bumps package.json and creates a v* tag
   git push --follow-tags   # triggers the release build
   ```
 
-  The installer is unsigned, so Windows SmartScreen shows a "More info → Run
-  anyway" prompt on first launch — expected for a personal build.
+  Installers are always uploaded as **workflow artifacts** (download them from
+  the Actions run page). If the `RELEASES_TOKEN` secret is set, they are also
+  **published to the public releases repo**, which is what powers in-app
+  auto-update.
+
+### One-time auto-update setup
+
+The source repo is private, so updates are served from a **public** repo the
+installed app can read without any embedded secret:
+
+1. Create a **public** repo, e.g. `pilotbyte-saas/pb-inventory-releases`
+   (leave it empty — the workflow creates releases in it).
+2. Create a GitHub **personal access token** with `contents: write` on that repo
+   (a fine-grained token scoped to just that repo is ideal).
+3. In the **private** source repo: **Settings → Secrets and variables → Actions →
+   New repository secret**, name it `RELEASES_TOKEN`, paste the token.
+4. Push a tag. The installed app then checks that repo, downloads new versions in
+   the background, and installs on restart (or automatically on next quit).
+
+If you use a different repo name, update `publish.repo` in `electron-builder.yml`.
+
+### App icon
+
+`build/icon.svg` is the source. `npm run icons` regenerates `icon.png`,
+`icon.ico`, and `icon.icns` (committed, consumed by electron-builder).
+
+### Signing notes
+
+- **Windows:** the installer is unsigned, so SmartScreen shows “More info → Run
+  anyway” on first launch. Auto-update still works.
+- **macOS:** without an Apple Developer ID the `.dmg` is unsigned — open it the
+  first time with right-click → **Open** (or `xattr -cr` the app). **macOS
+  auto-update requires signing + notarization**; add `MAC_CSC_LINK` and
+  `MAC_CSC_KEY_PASSWORD` secrets to enable it (the workflow already passes them
+  through when present).
 
 ---
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { BackendInfo, SyncBackend } from '@shared/types'
+import type { BackendInfo, SyncBackend, UpdateStatus } from '@shared/types'
 import { useData } from '../store'
 import { api } from '../api'
 import { Button, Card, Label, inputClass } from '../components/ui'
@@ -10,6 +10,8 @@ export default function Settings(): JSX.Element {
   const [info, setInfo] = useState<BackendInfo | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [version, setVersion] = useState('')
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
 
   // Google Sheets fields
   const [spreadsheetId, setSpreadsheetId] = useState('')
@@ -31,6 +33,11 @@ export default function Settings(): JSX.Element {
 
   useEffect(() => {
     void load()
+  }, [])
+
+  useEffect(() => {
+    void api.getAppVersion().then(setVersion)
+    return api.onUpdateStatus(setUpdate)
   }, [])
 
   const backend: SyncBackend = info?.backend ?? 'sheets'
@@ -285,6 +292,38 @@ export default function Settings(): JSX.Element {
           Recompute quantities from ledger
         </Button>
       </Card>
+
+      <Card className="space-y-3 p-5">
+        <h2 className="font-semibold text-slate-700">About &amp; updates</h2>
+        <p className="text-sm text-slate-600">
+          Version <span className="font-medium">{version || '…'}</span>
+        </p>
+        <Button variant="secondary" onClick={() => void api.checkForUpdates()}>
+          Check for updates
+        </Button>
+        {update && update.state !== 'idle' && (
+          <p className="text-sm text-slate-500">{updateLabel(update)}</p>
+        )}
+      </Card>
     </div>
   )
+}
+
+function updateLabel(u: UpdateStatus): string {
+  switch (u.state) {
+    case 'checking':
+      return 'Checking for updates…'
+    case 'available':
+      return `Update ${u.version ?? ''} found — downloading…`
+    case 'downloading':
+      return `Downloading update… ${u.percent ?? 0}%`
+    case 'downloaded':
+      return `Update ${u.version ?? ''} ready — restart to install.`
+    case 'none':
+      return u.message ?? 'You’re on the latest version.'
+    case 'error':
+      return `Update error: ${u.message ?? 'unknown'}`
+    default:
+      return ''
+  }
 }

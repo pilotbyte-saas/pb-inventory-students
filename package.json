@@ -15,12 +15,15 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "build:win": "electron-vite build && electron-builder --win",
+    "build:mac": "electron-vite build && electron-builder --mac --arm64",
     "build:dir": "electron-vite build && electron-builder --dir",
-    "check:sheets": "node scripts/check-sheets.mjs"
+    "check:sheets": "node scripts/check-sheets.mjs",
+    "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1057.0",
     "@aws-sdk/lib-dynamodb": "^3.1057.0",
+    "electron-updater": "^6.8.3",
     "googleapis": "^144.0.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
@@ -30,6 +33,7 @@
     "recharts": "^2.12.7"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
@@ -38,6 +42,7 @@
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.3.0",
+    "png2icons": "^2.0.1",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.4",
     "typescript": "^5.5.3",

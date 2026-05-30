@@ -99,6 +99,13 @@ export interface SyncStatus {
   message?: string
 }
 
+export interface UpdateStatus {
+  state: 'idle' | 'checking' | 'available' | 'none' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  percent?: number
+  message?: string
+}
+
 export interface TransactionFilter {
   itemId?: string
   type?: TransactionType
@@ -180,6 +187,12 @@ export interface IpcApi {
   setAwsConfig(config: AwsConfig): Promise<void>
   pickKeyFile(): Promise<{ ok: boolean; clientEmail?: string | null; error?: string }>
   openExternal(url: string): Promise<void>
+
+  // App version & auto-update
+  getAppVersion(): Promise<string>
+  checkForUpdates(): Promise<void>
+  onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
+
   // Subscribe to push updates of sync status. Returns an unsubscribe function.
   onSyncStatus(cb: (status: SyncStatus) => void): () => void
 }

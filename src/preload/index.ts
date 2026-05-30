@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { IpcApi, SyncStatus } from '@shared/types'
+import type { IpcApi, SyncStatus, UpdateStatus } from '@shared/types'
 
 // The single bridge between the sandboxed renderer and the main process.
 const api: IpcApi = {
@@ -33,6 +33,13 @@ const api: IpcApi = {
   setAwsConfig: (config) => ipcRenderer.invoke('cred:setAws', config),
   pickKeyFile: () => ipcRenderer.invoke('cred:pickKey'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  onUpdateStatus: (cb) => {
+    const listener = (_event: unknown, status: UpdateStatus): void => cb(status)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
+  },
   onSyncStatus: (cb) => {
     const listener = (_event: unknown, status: SyncStatus): void => cb(status)
     ipcRenderer.on('sync:status', listener)

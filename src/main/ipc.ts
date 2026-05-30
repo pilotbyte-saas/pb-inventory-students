@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import type {
   AwsConfig,
@@ -13,6 +13,7 @@ import * as inventory from './inventory'
 import * as batches from './batches'
 import * as config from './config'
 import * as manager from './sync/manager'
+import * as updater from './updater'
 
 // Registers every ipcMain.handle channel. The preload bridge maps window.api
 // methods onto these channel names.
@@ -115,4 +116,7 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))
+
+  ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('update:check', () => updater.checkForUpdates())
 }

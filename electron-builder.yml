@@ -2,11 +2,26 @@ appId: com.pilotbyte.classroom-inventory
 productName: Classroom Inventory
 directories:
   output: dist
+  buildResources: build
 files:
   - out/**/*
   - package.json
 win:
   target: nsis
+  icon: build/icon.ico
 nsis:
   oneClick: false
+  perMachine: false
   allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.education
+  icon: build/icon.icns
+# Auto-update feed: a PUBLIC releases repo, so the installed app needs no token.
+# Code stays in the private source repo; CI publishes built artifacts here.
+publish:
+  provider: github
+  owner: pilotbyte-saas
+  repo: pb-inventory-releases

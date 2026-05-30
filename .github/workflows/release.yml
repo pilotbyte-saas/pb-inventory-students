@@ -1,19 +1,31 @@
 name: Release
 
-# Push a version tag to build the installer and publish a GitHub Release:
-#   npm version patch   # bumps package.json + creates a v* tag
+# Push a version tag to build installers for Windows + macOS (Apple Silicon):
+#   npm version patch        # bumps package.json + creates a v* tag
 #   git push --follow-tags
+#
+# Installers are always uploaded as workflow artifacts (download from the run).
+# If the RELEASES_TOKEN secret is set, they are ALSO published to the public
+# releases repo, which is what powers in-app auto-update.
 on:
   push:
     tags: ['v*']
-  workflow_dispatch: {} # allow a manual run from the Actions tab
+  workflow_dispatch: {}
 
 jobs:
-  windows:
-    name: Build Windows installer
-    runs-on: windows-latest
-    permissions:
-      contents: write # needed to create/update the GitHub Release
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            build_args: --win --x64
+            artifact_name: classroom-inventory-windows
+          - os: macos-latest
+            build_args: --mac --arm64
+            artifact_name: classroom-inventory-macos-arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,23 +37,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build installer (electron-builder)
-        run: npm run build:win
+      - name: Build bundles
+        run: npm run build
 
-      - name: Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.exe
-            dist/*.exe.blockmap
-            dist/latest.yml
-          fail_on_unmatched_files: false
-          generate_release_notes: true
+      - name: Package${{ matrix.build_args }}
+        shell: bash
+        env:
+          # PAT with contents:write on the PUBLIC releases repo. If unset, we
+          # build the installers but skip publishing (grab them from artifacts).
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          # Optional Apple Developer signing (required for macOS auto-update).
+          # Safe to leave unset — the build still produces an installable .dmg.
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$GH_TOKEN" ]; then
+            npx electron-builder ${{ matrix.build_args }} --publish always
+          else
+            echo "RELEASES_TOKEN not set — building without publishing."
+            npx electron-builder ${{ matrix.build_args }} --publish never
+          fi
 
-      - name: Upload installer as build artifact
+      - name: Upload installers as artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: classroom-inventory-windows
-          path: dist/*.exe
+          name: ${{ matrix.artifact_name }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/*.yml
+            dist/*.blockmap
           if-no-files-found: warn
