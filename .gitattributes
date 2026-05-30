@@ -1,0 +1,13 @@
+# Normalize line endings to LF in the repo (keeps Windows + Linux CI consistent).
+* text=auto eol=lf
+
+# Lockfile is text but should never be merged by hand.
+package-lock.json -diff linguist-generated
+
+# Binary assets — never normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary

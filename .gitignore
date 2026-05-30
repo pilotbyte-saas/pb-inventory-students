@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# build output
+out/
+dist/
+
+# service account keys — NEVER commit a credential
+*.key.json
+service-account*.json
+credentials*.json
+secrets/
+
+# local caches and logs
+*.log
+.DS_Store
+Thumbs.db
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
