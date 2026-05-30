@@ -1,9 +1,16 @@
-import type { Item, Transaction } from '@shared/types'
+import type { Batch, Item, Template, Transaction } from '@shared/types'
 
-// A small interface so the sync backend stays swappable — a Drive or GitHub
-// adapter could drop in later without touching the rest of the app.
+// A small interface so the sync backend stays swappable. Items, batches, and
+// templates are current-state snapshots; transactions are append-only.
 export interface SyncAdapter {
-  pull(): Promise<{ items: Item[]; transactions: Transaction[] }>
-  pushItems(items: Item[]): Promise<void> // rewrites the Items snapshot
-  appendTransactions(txns: Transaction[]): Promise<void> // append-only
+  pull(): Promise<{
+    items: Item[]
+    transactions: Transaction[]
+    batches: Batch[]
+    templates: Template[]
+  }>
+  pushItems(items: Item[]): Promise<void>
+  pushBatches(batches: Batch[]): Promise<void>
+  pushTemplates(templates: Template[]): Promise<void>
+  appendTransactions(txns: Transaction[]): Promise<void>
 }

@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid'
 import type { Item, NewItemInput, Transaction, TransactionFilter } from '@shared/types'
+import { now, round2, slug } from './util'
 import * as cache from './cache'
 import * as queue from './queue'
 import * as manager from './sync/manager'
@@ -7,27 +8,11 @@ import * as manager from './sync/manager'
 // Business logic: consume, receive, adjust. Each updates the cache and the
 // queue, then triggers a (debounced) sync.
 
-function now(): string {
-  return new Date().toISOString()
-}
-
-function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100
-}
-
-function slug(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40)
-}
-
 function sortByTime(txns: Transaction[]): Transaction[] {
   return txns.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))
 }
 
-function appendTransaction(txn: Transaction): void {
+export function appendTransaction(txn: Transaction): void {
   const txns = cache.readTransactions()
   txns.push(txn)
   cache.writeTransactions(sortByTime(txns))
@@ -81,7 +66,7 @@ export function addItem(input: NewItemInput): void {
   }
   items.push(item)
   cache.writeItems(items)
-  queue.markItemsDirty()
+  queue.markDirty('items')
   if (quantity > 0) {
     appendTransaction({
       id: nanoid(),
@@ -112,7 +97,7 @@ export function updateItem(id: string, patch: Partial<Item>): void {
     updatedAt: now()
   }
   cache.writeItems(items)
-  queue.markItemsDirty()
+  queue.markDirty('items')
   manager.requestSync()
 }
 
@@ -125,7 +110,7 @@ export function consume(itemId: string, qty: number, note?: string): void {
   item.quantity = round2(item.quantity - applied)
   item.updatedAt = now()
   cache.writeItems(items)
-  queue.markItemsDirty()
+  queue.markDirty('items')
   appendTransaction({
     id: nanoid(),
     itemId,
@@ -153,7 +138,7 @@ export function receive(
   if (cost > 0) item.unitCost = cost // latest purchase price is the default valuation
   item.updatedAt = now()
   cache.writeItems(items)
-  queue.markItemsDirty()
+  queue.markDirty('items')
   appendTransaction({
     id: nanoid(),
     itemId,
@@ -176,7 +161,7 @@ export function adjust(itemId: string, delta: number, note?: string): void {
   item.quantity = round2(item.quantity + change)
   item.updatedAt = now()
   cache.writeItems(items)
-  queue.markItemsDirty()
+  queue.markDirty('items')
   appendTransaction({
     id: nanoid(),
     itemId,
@@ -205,6 +190,6 @@ export function recomputeFromLedger(): void {
     }
   }
   cache.writeItems(items)
-  queue.markItemsDirty()
+  queue.markDirty('items')
   manager.requestSync()
 }

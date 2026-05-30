@@ -1,7 +1,16 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
-import { readFileSync } from 'node:fs'
-import type { AwsConfig, Item, NewItemInput, SyncBackend, TransactionFilter } from '@shared/types'
+import { readFileSync, writeFileSync } from 'node:fs'
+import type {
+  AwsConfig,
+  BatchLine,
+  Item,
+  NewBatchInput,
+  NewItemInput,
+  SyncBackend,
+  TransactionFilter
+} from '@shared/types'
 import * as inventory from './inventory'
+import * as batches from './batches'
 import * as config from './config'
 import * as manager from './sync/manager'
 
@@ -30,6 +39,40 @@ export function registerIpc(): void {
     inventory.adjust(itemId, delta, note)
   )
   ipcMain.handle('inv:recompute', () => inventory.recomputeFromLedger())
+
+  ipcMain.handle('batch:list', () => batches.getBatches())
+  ipcMain.handle('template:list', () => batches.getTemplates())
+  ipcMain.handle('batch:consume', (_e, input: NewBatchInput) => batches.consumeBatch(input))
+  ipcMain.handle('batch:void', (_e, id: string) => batches.voidBatch(id))
+  ipcMain.handle(
+    'batch:updateMeta',
+    (
+      _e,
+      id: string,
+      patch: { timestamp?: string; category?: string; tags?: string[]; note?: string }
+    ) => batches.updateBatchMeta(id, patch)
+  )
+  ipcMain.handle('txn:reverse', (_e, id: string) => batches.reverseTransaction(id))
+  ipcMain.handle('template:save', (_e, name: string, lines: BatchLine[]) =>
+    batches.saveTemplate(name, lines)
+  )
+  ipcMain.handle(
+    'template:update',
+    (_e, id: string, patch: { name?: string; lines?: BatchLine[] }) =>
+      batches.updateTemplate(id, patch)
+  )
+  ipcMain.handle('template:delete', (_e, id: string) => batches.deleteTemplate(id))
+  ipcMain.handle('file:save', async (_e, defaultName: string, base64: string) => {
+    const win = BrowserWindow.getFocusedWindow() ?? undefined
+    const res = await dialog.showSaveDialog(win!, { defaultPath: defaultName })
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true }
+    try {
+      writeFileSync(res.filePath, Buffer.from(base64, 'base64'))
+      return { ok: true, path: res.filePath }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 
   ipcMain.handle('sync:status', () => manager.getStatus())
   ipcMain.handle('sync:now', () => manager.sync())

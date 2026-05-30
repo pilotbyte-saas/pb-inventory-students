@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { join } from 'node:path'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
-import type { Item, Transaction } from '@shared/types'
+import type { Batch, Item, Template, Transaction } from '@shared/types'
 
 // The working copy: plain JSON files in userData. The UI reads/writes these so
 // it never waits on the network. The sync adapter reconciles them with Sheets.
@@ -41,4 +41,20 @@ export function readTransactions(): Transaction[] {
 
 export function writeTransactions(transactions: Transaction[]): void {
   writeJson('transactions.json', transactions)
+}
+
+export function readBatches(): Batch[] {
+  return readJson<Batch[]>('batches.json', [])
+}
+
+export function writeBatches(batches: Batch[]): void {
+  writeJson('batches.json', batches)
+}
+
+export function readTemplates(): Template[] {
+  return readJson<Template[]>('templates.json', [])
+}
+
+export function writeTemplates(templates: Template[]): void {
+  writeJson('templates.json', templates)
 }

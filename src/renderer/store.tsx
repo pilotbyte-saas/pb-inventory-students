@@ -1,14 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Item, NewItemInput, SyncStatus, Transaction } from '@shared/types'
+import type {
+  Batch,
+  BatchLine,
+  Item,
+  NewBatchInput,
+  NewItemInput,
+  SyncStatus,
+  Template,
+  Transaction
+} from '@shared/types'
 import { api } from './api'
 
-// Holds the cached data and exposes action wrappers that call the main process
-// and then refresh. The UI reads from here; it never talks to IPC directly
-// except for one-off Settings calls.
+type BatchMetaPatch = { timestamp?: string; category?: string; tags?: string[]; note?: string }
+type TemplatePatch = { name?: string; lines?: BatchLine[] }
+
 interface DataContextValue {
   items: Item[]
   transactions: Transaction[]
+  batches: Batch[]
+  templates: Template[]
   sync: SyncStatus
   ready: boolean
   refresh: () => Promise<void>
@@ -25,6 +36,13 @@ interface DataContextValue {
   adjust: (itemId: string, delta: number, note?: string) => Promise<void>
   recompute: () => Promise<void>
   syncNow: () => Promise<void>
+  consumeBatch: (input: NewBatchInput) => Promise<void>
+  voidBatch: (id: string) => Promise<void>
+  updateBatchMeta: (id: string, patch: BatchMetaPatch) => Promise<void>
+  reverseTransaction: (id: string) => Promise<void>
+  saveTemplate: (name: string, lines: BatchLine[]) => Promise<void>
+  updateTemplate: (id: string, patch: TemplatePatch) => Promise<void>
+  deleteTemplate: (id: string) => Promise<void>
 }
 
 const DataContext = createContext<DataContextValue | null>(null)
@@ -32,17 +50,23 @@ const DataContext = createContext<DataContextValue | null>(null)
 export function DataProvider({ children }: { children: ReactNode }): JSX.Element {
   const [items, setItems] = useState<Item[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [batches, setBatches] = useState<Batch[]>([])
+  const [templates, setTemplates] = useState<Template[]>([])
   const [sync, setSync] = useState<SyncStatus>({ state: 'offline', lastSyncedAt: null, pending: 0 })
   const [ready, setReady] = useState(false)
 
   const refresh = useCallback(async () => {
-    const [i, t, s] = await Promise.all([
+    const [i, t, b, tpl, s] = await Promise.all([
       api.getItems(),
       api.getTransactions(),
+      api.getBatches(),
+      api.getTemplates(),
       api.getSyncStatus()
     ])
     setItems(i)
     setTransactions(t)
+    setBatches(b)
+    setTemplates(tpl)
     setSync(s)
     setReady(true)
   }, [])
@@ -51,7 +75,6 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
     void refresh()
     const off = api.onSyncStatus((s) => {
       setSync(s)
-      // A completed sync may have pulled changes — reload the working copy.
       if (s.state === 'synced') void refresh()
     })
     const onOnline = (): void => void api.syncNow()
@@ -105,11 +128,62 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
     await api.syncNow()
     await refresh()
   }, [refresh])
+  const consumeBatch = useCallback(
+    async (input: NewBatchInput) => {
+      await api.consumeBatch(input)
+      await refresh()
+    },
+    [refresh]
+  )
+  const voidBatch = useCallback(
+    async (id: string) => {
+      await api.voidBatch(id)
+      await refresh()
+    },
+    [refresh]
+  )
+  const updateBatchMeta = useCallback(
+    async (id: string, patch: BatchMetaPatch) => {
+      await api.updateBatchMeta(id, patch)
+      await refresh()
+    },
+    [refresh]
+  )
+  const reverseTransaction = useCallback(
+    async (id: string) => {
+      await api.reverseTransaction(id)
+      await refresh()
+    },
+    [refresh]
+  )
+  const saveTemplate = useCallback(
+    async (name: string, lines: BatchLine[]) => {
+      await api.saveTemplate(name, lines)
+      await refresh()
+    },
+    [refresh]
+  )
+  const updateTemplate = useCallback(
+    async (id: string, patch: TemplatePatch) => {
+      await api.updateTemplate(id, patch)
+      await refresh()
+    },
+    [refresh]
+  )
+  const deleteTemplate = useCallback(
+    async (id: string) => {
+      await api.deleteTemplate(id)
+      await refresh()
+    },
+    [refresh]
+  )
 
   const value = useMemo<DataContextValue>(
     () => ({
       items,
       transactions,
+      batches,
+      templates,
       sync,
       ready,
       refresh,
@@ -119,11 +193,20 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
       receive,
       adjust,
       recompute,
-      syncNow
+      syncNow,
+      consumeBatch,
+      voidBatch,
+      updateBatchMeta,
+      reverseTransaction,
+      saveTemplate,
+      updateTemplate,
+      deleteTemplate
     }),
     [
       items,
       transactions,
+      batches,
+      templates,
       sync,
       ready,
       refresh,
@@ -133,7 +216,14 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
       receive,
       adjust,
       recompute,
-      syncNow
+      syncNow,
+      consumeBatch,
+      voidBatch,
+      updateBatchMeta,
+      reverseTransaction,
+      saveTemplate,
+      updateTemplate,
+      deleteTemplate
     ]
   )
 

@@ -30,6 +30,7 @@ export interface Transaction {
   receiptRef?: string
   note?: string
   timestamp: string // ISO
+  batchId?: string // set when this entry was recorded as part of a batch consume
 }
 
 // Fields a user supplies when creating an item. The main process fills in the
@@ -46,6 +47,47 @@ export interface NewItemInput {
   reorderUrl?: string
   supplier?: string
   notes?: string
+}
+
+// A line in a batch or template: an item and a positive quantity.
+export interface BatchLine {
+  itemId: string
+  quantity: number
+}
+
+export type BatchStatus = 'active' | 'voided'
+
+// A batch is one consume event (e.g. a training session). Its metadata lives
+// here and syncs as a snapshot; the actual quantities are normal consume
+// transactions tagged with this batch's id (the ledger stays the source of
+// truth for stock).
+export interface Batch {
+  id: string
+  timestamp: string // when it happened (event date, user-settable, ISO)
+  category: string // e.g. "Private training"
+  tags: string[]
+  note?: string
+  status: BatchStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export interface NewBatchInput {
+  timestamp?: string // defaults to now
+  category: string
+  tags?: string[]
+  note?: string
+  lines: BatchLine[] // positive quantities to consume
+}
+
+// A reusable set of items commonly consumed together.
+export interface Template {
+  id: string
+  name: string
+  lines: BatchLine[]
+  deleted?: boolean // soft-delete tombstone so removals propagate across devices
+  createdAt: string
+  updatedAt: string
 }
 
 export type SyncState = 'synced' | 'syncing' | 'offline' | 'error'
@@ -107,6 +149,26 @@ export interface IpcApi {
   ): Promise<void>
   adjust(itemId: string, delta: number, note?: string): Promise<void>
   recompute(): Promise<void>
+
+  // Batches & templates
+  getBatches(): Promise<Batch[]>
+  getTemplates(): Promise<Template[]>
+  consumeBatch(input: NewBatchInput): Promise<void>
+  voidBatch(batchId: string): Promise<void>
+  updateBatchMeta(
+    batchId: string,
+    patch: { timestamp?: string; category?: string; tags?: string[]; note?: string }
+  ): Promise<void>
+  reverseTransaction(txnId: string): Promise<void>
+  saveTemplate(name: string, lines: BatchLine[]): Promise<void>
+  updateTemplate(id: string, patch: { name?: string; lines?: BatchLine[] }): Promise<void>
+  deleteTemplate(id: string): Promise<void>
+
+  // Export: write base64-encoded content to a file the user picks.
+  saveFile(
+    defaultName: string,
+    base64: string
+  ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
   getSyncStatus(): Promise<SyncStatus>
   syncNow(): Promise<void>
   testConnection(): Promise<{ ok: boolean; error?: string }>

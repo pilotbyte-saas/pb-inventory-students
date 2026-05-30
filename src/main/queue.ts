@@ -3,16 +3,20 @@ import { join } from 'node:path'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { Transaction } from '@shared/types'
 
-// Tracks what still needs to reach the Sheet:
+// Tracks what still needs to reach the backend:
 //  - transactions: an append queue (each is a distinct new row)
-//  - itemsDirty: a single flag, since pushing items rewrites the whole snapshot
-// itemsVersion lets a sync tell whether new local edits arrived while it was
-// in flight, so it never clears the dirty flag over un-synced changes.
+//  - dirty: per-collection flags for the snapshot collections (items, batches,
+//    templates). Each carries a version so a sync can tell whether new local
+//    edits arrived while it was in flight, and never clears the flag over them.
+
+interface DirtyState {
+  dirty: boolean
+  version: number
+}
 
 interface QueueData {
   transactions: Transaction[]
-  itemsDirty: boolean
-  itemsVersion: number
+  dirty: Record<string, DirtyState>
 }
 
 let cached: QueueData | null = null
@@ -22,15 +26,26 @@ function queuePath(): string {
 }
 
 function empty(): QueueData {
-  return { transactions: [], itemsDirty: false, itemsVersion: 0 }
+  return { transactions: [], dirty: {} }
 }
 
 function load(): QueueData {
   if (cached) return cached
   try {
-    cached = existsSync(queuePath())
-      ? { ...empty(), ...(JSON.parse(readFileSync(queuePath(), 'utf8')) as Partial<QueueData>) }
-      : empty()
+    if (existsSync(queuePath())) {
+      const raw = JSON.parse(readFileSync(queuePath(), 'utf8')) as Partial<QueueData> & {
+        itemsDirty?: boolean
+        itemsVersion?: number
+      }
+      const data: QueueData = { transactions: raw.transactions ?? [], dirty: raw.dirty ?? {} }
+      // Migrate the old single items-dirty shape.
+      if (raw.dirty === undefined && raw.itemsDirty) {
+        data.dirty.items = { dirty: true, version: raw.itemsVersion ?? 1 }
+      }
+      cached = data
+    } else {
+      cached = empty()
+    }
   } catch {
     cached = empty()
   }
@@ -42,6 +57,11 @@ function save(data: QueueData): void {
   writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
   renameSync(tmp, queuePath())
   cached = data
+}
+
+function stateFor(data: QueueData, collection: string): DirtyState {
+  if (!data.dirty[collection]) data.dirty[collection] = { dirty: false, version: 0 }
+  return data.dirty[collection]
 }
 
 export function enqueueTransaction(txn: Transaction): void {
@@ -61,31 +81,34 @@ export function removeTransactions(ids: string[]): void {
   save(d)
 }
 
-export function markItemsDirty(): void {
+export function markDirty(collection: string): void {
   const d = load()
-  d.itemsDirty = true
-  d.itemsVersion += 1
+  const s = stateFor(d, collection)
+  s.dirty = true
+  s.version += 1
   save(d)
 }
 
-export function getItemsVersion(): number {
-  return load().itemsVersion
+export function getVersion(collection: string): number {
+  return stateFor(load(), collection).version
 }
 
-export function isItemsDirty(): boolean {
-  return load().itemsDirty
+export function isDirty(collection: string): boolean {
+  return stateFor(load(), collection).dirty
 }
 
-// Only clear if no new item edits arrived since the sync captured `version`.
-export function clearItemsDirtyIfUnchanged(version: number): void {
+// Only clear if no new edits to this collection arrived since `version`.
+export function clearDirtyIfUnchanged(collection: string, version: number): void {
   const d = load()
-  if (d.itemsVersion === version && d.itemsDirty) {
-    d.itemsDirty = false
+  const s = stateFor(d, collection)
+  if (s.dirty && s.version === version) {
+    s.dirty = false
     save(d)
   }
 }
 
 export function pendingCount(): number {
   const d = load()
-  return d.transactions.length + (d.itemsDirty ? 1 : 0)
+  const dirtyCount = Object.values(d.dirty).filter((s) => s.dirty).length
+  return d.transactions.length + dirtyCount
 }

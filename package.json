@@ -22,6 +22,8 @@
     "@aws-sdk/client-dynamodb": "^3.1057.0",
     "@aws-sdk/lib-dynamodb": "^3.1057.0",
     "googleapis": "^144.0.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "nanoid": "^3.3.7",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

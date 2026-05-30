@@ -6,15 +6,26 @@ import {
   waitUntilTableExists
 } from '@aws-sdk/client-dynamodb'
 import { DynamoDBDocumentClient, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb'
-import type { AwsConfig, Item, Transaction, TransactionType } from '@shared/types'
+import type {
+  AwsConfig,
+  Batch,
+  BatchStatus,
+  Item,
+  Template,
+  Transaction,
+  TransactionType
+} from '@shared/types'
 import type { SyncAdapter } from './SyncAdapter'
 
-// Single-table design. All items live under one partition and all transactions
-// under another — fine at classroom volume (a few dozen items, a few devices).
-//   Items:        pk = "ITEM", sk = itemId
-//   Transactions: pk = "TXN",  sk = "<timestamp>#<id>"  (sorts by time)
+// Single-table design — one partition per collection (fine at classroom volume).
+//   Items:        pk = "ITEM",     sk = itemId
+//   Transactions: pk = "TXN",      sk = "<timestamp>#<id>"
+//   Batches:      pk = "BATCH",    sk = batchId
+//   Templates:    pk = "TEMPLATE", sk = templateId
 const ITEM_PK = 'ITEM'
 const TXN_PK = 'TXN'
+const BATCH_PK = 'BATCH'
+const TMPL_PK = 'TEMPLATE'
 
 type Row = Record<string, unknown>
 
@@ -71,7 +82,35 @@ function rowToTxn(r: Row): Transaction {
     totalCost: optNum(r.totalCost),
     receiptRef: optStr(r.receiptRef),
     note: optStr(r.note),
-    timestamp: str(r.timestamp)
+    timestamp: str(r.timestamp),
+    batchId: optStr(r.batchId)
+  }
+}
+
+function rowToBatch(r: Row): Batch {
+  return {
+    id: str(r.id),
+    timestamp: str(r.timestamp),
+    category: str(r.category),
+    tags: Array.isArray(r.tags) ? (r.tags as unknown[]).map(str).filter(Boolean) : [],
+    note: optStr(r.note),
+    status: (str(r.status) || 'active') as BatchStatus,
+    createdAt: str(r.createdAt),
+    updatedAt: str(r.updatedAt)
+  }
+}
+
+function rowToTemplate(r: Row): Template {
+  const lines = Array.isArray(r.lines)
+    ? (r.lines as Row[]).map((l) => ({ itemId: str(l.itemId), quantity: num(l.quantity) }))
+    : []
+  return {
+    id: str(r.id),
+    name: str(r.name),
+    lines,
+    deleted: r.deleted === true,
+    createdAt: str(r.createdAt),
+    updatedAt: str(r.updatedAt)
   }
 }
 
@@ -86,14 +125,12 @@ export class DynamoDbAdapter implements SyncAdapter {
       region: cfg.region,
       credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey }
     })
-    // removeUndefinedValues so optional fields (reorderUrl, note, …) don't throw.
     this.doc = DynamoDBDocumentClient.from(this.raw, {
       marshallOptions: { removeUndefinedValues: true }
     })
     this.table = cfg.tableName
   }
 
-  // Create the table on first use if it isn't there. Runs once per adapter.
   private ensureSetup(): Promise<void> {
     if (!this.setupPromise) {
       this.setupPromise = this.doSetup().catch((err) => {
@@ -107,14 +144,14 @@ export class DynamoDbAdapter implements SyncAdapter {
   private async doSetup(): Promise<void> {
     try {
       await this.raw.send(new DescribeTableCommand({ TableName: this.table }))
-      return // already exists
+      return
     } catch (err) {
       if (!(err instanceof ResourceNotFoundException)) throw err
     }
     await this.raw.send(
       new CreateTableCommand({
         TableName: this.table,
-        BillingMode: 'PAY_PER_REQUEST', // serverless, pay-per-request
+        BillingMode: 'PAY_PER_REQUEST',
         AttributeDefinitions: [
           { AttributeName: 'pk', AttributeType: 'S' },
           { AttributeName: 'sk', AttributeType: 'S' }
@@ -146,34 +183,63 @@ export class DynamoDbAdapter implements SyncAdapter {
     return rows
   }
 
-  async pull(): Promise<{ items: Item[]; transactions: Transaction[] }> {
+  // Snapshot upsert with optimistic concurrency: only overwrite if our copy is
+  // at least as new (newest updatedAt wins; devices never clobber each other).
+  private async putSnapshot(
+    pk: string,
+    records: { id: string; updatedAt: string }[]
+  ): Promise<void> {
+    for (const rec of records) {
+      try {
+        await this.doc.send(
+          new PutCommand({
+            TableName: this.table,
+            Item: { pk, sk: rec.id, ...rec },
+            ConditionExpression: 'attribute_not_exists(updatedAt) OR updatedAt <= :u',
+            ExpressionAttributeValues: { ':u': rec.updatedAt }
+          })
+        )
+      } catch (err) {
+        if (isConditionalFail(err)) continue
+        throw err
+      }
+    }
+  }
+
+  async pull(): Promise<{
+    items: Item[]
+    transactions: Transaction[]
+    batches: Batch[]
+    templates: Template[]
+  }> {
     await this.ensureSetup()
-    const [itemRows, txnRows] = await Promise.all([this.queryAll(ITEM_PK), this.queryAll(TXN_PK)])
+    const [itemRows, txnRows, batchRows, tmplRows] = await Promise.all([
+      this.queryAll(ITEM_PK),
+      this.queryAll(TXN_PK),
+      this.queryAll(BATCH_PK),
+      this.queryAll(TMPL_PK)
+    ])
     return {
       items: itemRows.filter((r) => str(r.id).length > 0).map(rowToItem),
-      transactions: txnRows.filter((r) => str(r.id).length > 0).map(rowToTxn)
+      transactions: txnRows.filter((r) => str(r.id).length > 0).map(rowToTxn),
+      batches: batchRows.filter((r) => str(r.id).length > 0).map(rowToBatch),
+      templates: tmplRows.filter((r) => str(r.id).length > 0).map(rowToTemplate)
     }
   }
 
   async pushItems(items: Item[]): Promise<void> {
     await this.ensureSetup()
-    for (const item of items) {
-      try {
-        // Optimistic concurrency: only overwrite if our copy is at least as new.
-        // Two devices editing different items never clobber each other.
-        await this.doc.send(
-          new PutCommand({
-            TableName: this.table,
-            Item: { pk: ITEM_PK, sk: item.id, ...item },
-            ConditionExpression: 'attribute_not_exists(updatedAt) OR updatedAt <= :u',
-            ExpressionAttributeValues: { ':u': item.updatedAt }
-          })
-        )
-      } catch (err) {
-        if (isConditionalFail(err)) continue // remote is newer — keep it, we'll pull it
-        throw err
-      }
-    }
+    await this.putSnapshot(ITEM_PK, items)
+  }
+
+  async pushBatches(batches: Batch[]): Promise<void> {
+    await this.ensureSetup()
+    await this.putSnapshot(BATCH_PK, batches)
+  }
+
+  async pushTemplates(templates: Template[]): Promise<void> {
+    await this.ensureSetup()
+    await this.putSnapshot(TMPL_PK, templates)
   }
 
   async appendTransactions(txns: Transaction[]): Promise<void> {
@@ -185,11 +251,11 @@ export class DynamoDbAdapter implements SyncAdapter {
           new PutCommand({
             TableName: this.table,
             Item: { pk: TXN_PK, sk: `${t.timestamp}#${t.id}`, ...t },
-            ConditionExpression: 'attribute_not_exists(sk)' // idempotent append
+            ConditionExpression: 'attribute_not_exists(sk)'
           })
         )
       } catch (err) {
-        if (isConditionalFail(err)) continue // already recorded by us or another device
+        if (isConditionalFail(err)) continue
         throw err
       }
     }

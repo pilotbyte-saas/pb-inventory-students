@@ -1,4 +1,4 @@
-import type { Item, SyncState, SyncStatus, Transaction } from '@shared/types'
+import type { SyncState, SyncStatus, Transaction } from '@shared/types'
 import * as config from '../config'
 import * as cache from '../cache'
 import * as queue from '../queue'
@@ -147,15 +147,18 @@ function buildAdapter(): SyncAdapter | null {
   return adapter
 }
 
-// Merge by newest updatedAt per id; the union keeps items present on only one
-// side. This is what lets multiple devices converge — whoever edited an item
-// most recently wins for that item, independent of edits to other items.
-function mergeItems(remoteItems: Item[], localItems: Item[]): Item[] {
-  const map = new Map<string, Item>()
-  for (const it of remoteItems) map.set(it.id, it)
-  for (const it of localItems) {
-    const existing = map.get(it.id)
-    if (!existing || it.updatedAt >= existing.updatedAt) map.set(it.id, it)
+// Merge by newest updatedAt per id; the union keeps records present on only one
+// side. This is what lets multiple devices converge — whoever edited a record
+// most recently wins for it, independent of edits to other records.
+function mergeByUpdatedAt<T extends { id: string; updatedAt: string }>(
+  remote: T[],
+  local: T[]
+): T[] {
+  const map = new Map<string, T>()
+  for (const r of remote) map.set(r.id, r)
+  for (const l of local) {
+    const existing = map.get(l.id)
+    if (!existing || l.updatedAt >= existing.updatedAt) map.set(l.id, l)
   }
   return [...map.values()]
 }
@@ -182,24 +185,41 @@ export async function sync(): Promise<void> {
   setState('syncing', 'Syncing…')
   try {
     const pulled = await a.pull()
-    const dirty = queue.isItemsDirty()
-    const dirtyVersion = queue.getItemsVersion()
     const pending = queue.getPendingTransactions()
-    const merged = mergeItems(pulled.items, cache.readItems())
 
-    // Push: transactions are append-only; items are a full snapshot rewrite.
+    const itemsDirty = queue.isDirty('items')
+    const itemsVersion = queue.getVersion('items')
+    const batchesDirty = queue.isDirty('batches')
+    const batchesVersion = queue.getVersion('batches')
+    const templatesDirty = queue.isDirty('templates')
+    const templatesVersion = queue.getVersion('templates')
+
+    const items = mergeByUpdatedAt(pulled.items, cache.readItems())
+    const batches = mergeByUpdatedAt(pulled.batches, cache.readBatches())
+    const templates = mergeByUpdatedAt(pulled.templates, cache.readTemplates())
+
+    // Transactions are append-only; the snapshot collections push per-collection.
     if (pending.length) {
       await a.appendTransactions(pending)
       queue.removeTransactions(pending.map((p) => p.id))
     }
-    if (dirty) {
-      await a.pushItems(merged)
-      queue.clearItemsDirtyIfUnchanged(dirtyVersion)
+    if (itemsDirty) {
+      await a.pushItems(items)
+      queue.clearDirtyIfUnchanged('items', itemsVersion)
+    }
+    if (batchesDirty) {
+      await a.pushBatches(batches)
+      queue.clearDirtyIfUnchanged('batches', batchesVersion)
+    }
+    if (templatesDirty) {
+      await a.pushTemplates(templates)
+      queue.clearDirtyIfUnchanged('templates', templatesVersion)
     }
 
-    // Write the cache from the freshest local state so edits made mid-sync
-    // are preserved, then fold in anything the Sheet had.
-    cache.writeItems(mergeItems(pulled.items, cache.readItems()))
+    // Re-merge from the freshest local state so edits made mid-sync survive.
+    cache.writeItems(mergeByUpdatedAt(pulled.items, cache.readItems()))
+    cache.writeBatches(mergeByUpdatedAt(pulled.batches, cache.readBatches()))
+    cache.writeTemplates(mergeByUpdatedAt(pulled.templates, cache.readTemplates()))
     cache.writeTransactions(
       dedupeAndSort([...pulled.transactions, ...pending, ...queue.getPendingTransactions()])
     )
