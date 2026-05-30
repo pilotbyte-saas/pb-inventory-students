@@ -19,9 +19,9 @@ mac:
     - zip
   category: public.app-category.education
   icon: build/icon.icns
-# Auto-update feed: a PUBLIC releases repo, so the installed app needs no token.
-# Code stays in the private source repo; CI publishes built artifacts here.
+# Auto-update feed: this repo's GitHub Releases. With the repo public, the
+# installed app reads updates with no token of its own.
 publish:
   provider: github
   owner: pilotbyte-saas
-  repo: pb-inventory-releases
+  repo: pb-inventory-students

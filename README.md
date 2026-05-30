@@ -170,21 +170,13 @@ npm run check:sheets -- "C:\path\to\key.json" "<spreadsheetId>"
   **published to the public releases repo**, which is what powers in-app
   auto-update.
 
-### One-time auto-update setup
+### Auto-update
 
-The source repo is private, so updates are served from a **public** repo the
-installed app can read without any embedded secret:
-
-1. Create a **public** repo, e.g. `pilotbyte-saas/pb-inventory-releases`
-   (leave it empty — the workflow creates releases in it).
-2. Create a GitHub **personal access token** with `contents: write` on that repo
-   (a fine-grained token scoped to just that repo is ideal).
-3. In the **private** source repo: **Settings → Secrets and variables → Actions →
-   New repository secret**, name it `RELEASES_TOKEN`, paste the token.
-4. Push a tag. The installed app then checks that repo, downloads new versions in
-   the background, and installs on restart (or automatically on next quit).
-
-If you use a different repo name, update `publish.repo` in `electron-builder.yml`.
+This repo is **public**, so updates are served straight from its **GitHub
+Releases** and the installed app needs no token. CI publishes with the built-in
+`GITHUB_TOKEN` — nothing to configure. Push a tag and installed apps check for
+the new version, download it in the background, and install on restart (or
+automatically on next quit).
 
 ### App icon
 

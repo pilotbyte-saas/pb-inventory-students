@@ -15,6 +15,8 @@ on:
 jobs:
   build:
     name: Build (${{ matrix.os }})
+    permissions:
+      contents: write # let the built-in token publish to this repo's Releases
     strategy:
       fail-fast: false
       matrix:
@@ -43,18 +45,18 @@ jobs:
       - name: Package${{ matrix.build_args }}
         shell: bash
         env:
-          # PAT with contents:write on the PUBLIC releases repo. If unset, we
-          # build the installers but skip publishing (grab them from artifacts).
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          # Built-in token — publishes to THIS repo's Releases. Make the repo
+          # public so the installed app reads updates with no token of its own.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Optional Apple Developer signing (required for macOS auto-update).
           # Safe to leave unset — the build still produces an installable .dmg.
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
         run: |
-          if [ -n "$GH_TOKEN" ]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             npx electron-builder ${{ matrix.build_args }} --publish always
           else
-            echo "RELEASES_TOKEN not set — building without publishing."
+            echo "Not a tag — building without publishing."
             npx electron-builder ${{ matrix.build_args }} --publish never
           fi
 
