@@ -11,7 +11,21 @@ non-event: changes queue locally and flush on reconnect.
 - **Main:** pluggable sync backend — **Google Sheets** (googleapis) or **AWS
   DynamoDB** (`@aws-sdk`) — with the credential encrypted via Electron `safeStorage`
 - **Cache:** plain JSON files in the app `userData` directory
-- **Build:** electron-vite (+ electron-builder, optional)
+- **Build:** electron-vite + electron-builder (Windows + macOS), auto-update via electron-updater
+
+---
+
+## Download
+
+Get the latest installer from the
+[**Releases page**](https://github.com/pilotbyte-saas/pb-inventory-students/releases/latest):
+
+- **Windows:** `Classroom.Inventory.Setup.<version>.exe`
+- **macOS (Apple Silicon):** `Classroom.Inventory-<version>-arm64.dmg`
+
+The app updates itself afterward — new releases install automatically on restart.
+First launch is unsigned: on macOS use **right-click → Open**; on Windows click
+**More info → Run anyway** at the SmartScreen prompt.
 
 ---
 
