@@ -67,6 +67,8 @@ function rowToItem(r: Row): Item {
     reorderUrl: optStr(r.reorderUrl),
     supplier: optStr(r.supplier),
     notes: optStr(r.notes),
+    deleted: r.deleted === true ? true : undefined,
+    deletedAt: optStr(r.deletedAt),
     createdAt: str(r.createdAt),
     updatedAt: str(r.updatedAt)
   }

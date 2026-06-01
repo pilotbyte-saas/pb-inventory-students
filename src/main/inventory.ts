@@ -26,7 +26,8 @@ function findItemOrThrow(items: Item[], id: string): Item {
 }
 
 export function getItems(): Item[] {
-  return cache.readItems()
+  // Hide soft-deleted items from the app; they remain in the cache/cloud for audit.
+  return cache.readItems().filter((i) => !i.deleted)
 }
 
 export function getTransactions(filter?: TransactionFilter): Transaction[] {
@@ -98,6 +99,30 @@ export function updateItem(id: string, patch: Partial<Item>): void {
   }
   cache.writeItems(items)
   queue.markDirty('items')
+  manager.requestSync()
+}
+
+// Soft-delete: tombstone the item (kept in the cloud for audit) and log a
+// `delete` ledger entry. Hidden from inventory and excluded from all counts.
+export function deleteItem(id: string): void {
+  const items = cache.readItems()
+  const item = items.find((i) => i.id === id)
+  if (!item) throw new Error(`Item not found: ${id}`)
+  if (item.deleted) return
+  const ts = now()
+  item.deleted = true
+  item.deletedAt = ts
+  item.updatedAt = ts
+  cache.writeItems(items)
+  queue.markDirty('items')
+  appendTransaction({
+    id: nanoid(),
+    itemId: id,
+    type: 'delete',
+    quantity: 0,
+    note: `Deleted "${item.name}" (had ${item.quantity} on hand)`,
+    timestamp: ts
+  })
   manager.requestSync()
 }
 
@@ -183,6 +208,7 @@ export function recomputeFromLedger(): void {
   }
   const ts = now()
   for (const item of items) {
+    if (item.deleted) continue
     const sum = totals.get(item.id) ?? 0
     if (item.quantity !== sum) {
       item.quantity = sum

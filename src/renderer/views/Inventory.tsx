@@ -6,14 +6,17 @@ import { itemStatus, money, qty } from '../format'
 import { ConsumeModal } from '../components/ConsumeModal'
 import { ReceiveModal } from '../components/ReceiveModal'
 import { ItemForm } from '../components/ItemForm'
+import { Modal } from '../components/Modal'
 
 export default function Inventory(): JSX.Element {
-  const { items } = useData()
+  const { items, deleteItem } = useData()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
   const [consumeItem, setConsumeItem] = useState<Item | null>(null)
   const [receiveItem, setReceiveItem] = useState<Item | null>(null)
   const [editItem, setEditItem] = useState<Item | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Item | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [adding, setAdding] = useState(false)
 
   const categories = useMemo(
@@ -108,6 +111,13 @@ export default function Inventory(): JSX.Element {
                     <Button variant="ghost" onClick={() => setEditItem(i)}>
                       Edit
                     </Button>
+                    <Button
+                      variant="ghost"
+                      className="text-red-600 hover:bg-red-50"
+                      onClick={() => setDeleteTarget(i)}
+                    >
+                      Delete
+                    </Button>
                   </div>
                 </td>
               </tr>
@@ -120,6 +130,38 @@ export default function Inventory(): JSX.Element {
       {receiveItem && <ReceiveModal item={receiveItem} onClose={() => setReceiveItem(null)} />}
       {editItem && <ItemForm item={editItem} onClose={() => setEditItem(null)} />}
       {adding && <ItemForm onClose={() => setAdding(false)} />}
+      {deleteTarget && (
+        <Modal title="Delete item?" onClose={() => setDeleteTarget(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Delete <span className="font-medium text-slate-800">{deleteTarget.name}</span>
+              {deleteTarget.sku ? ` (${deleteTarget.sku})` : ''}? It's removed from your inventory and
+              stops counting toward totals. A deletion record is kept in DynamoDB for audit — you
+              currently have {qty(deleteTarget.quantity)} {deleteTarget.unit} on hand.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                disabled={deleting}
+                onClick={async () => {
+                  setDeleting(true)
+                  try {
+                    await deleteItem(deleteTarget.id)
+                    setDeleteTarget(null)
+                  } finally {
+                    setDeleting(false)
+                  }
+                }}
+              >
+                Delete item
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

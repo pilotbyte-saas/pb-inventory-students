@@ -4,12 +4,13 @@ import { useData } from '../store'
 import { Button, Card, inputClass, selectClass } from '../components/ui'
 import { dateTime, money, qty } from '../format'
 
-const TYPES: TransactionType[] = ['initial', 'receive', 'consume', 'adjust']
+const TYPES: TransactionType[] = ['initial', 'receive', 'consume', 'adjust', 'delete']
 const TYPE_LABEL: Record<TransactionType, string> = {
   initial: 'Initial',
   receive: 'Restock',
   consume: 'Consume',
-  adjust: 'Adjust'
+  adjust: 'Adjust',
+  delete: 'Deleted'
 }
 
 export default function History(): JSX.Element {

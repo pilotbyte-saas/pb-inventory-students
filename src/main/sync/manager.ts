@@ -1,50 +1,25 @@
-import type { SyncState, SyncStatus, Transaction } from '@shared/types'
+import type {
+  ConflictItem,
+  ConflictResolution,
+  Item,
+  SyncState,
+  SyncStatus,
+  Transaction
+} from '@shared/types'
 import * as config from '../config'
 import * as cache from '../cache'
 import * as queue from '../queue'
-import { GoogleSheetsAdapter } from './sheets'
+import { now, round2 } from '../util'
 import { DynamoDbAdapter } from './dynamodb'
 import type { SyncAdapter } from './SyncAdapter'
 
-const UNCONFIGURED_MSG = 'Not configured — add your key and spreadsheet ID in Settings.'
+const LOCAL_MSG = 'Local only — changes are saved on this device. Switch to AWS DynamoDB to sync.'
+const UNCONFIGURED_MSG = 'Add your AWS keys in Settings to sync to the cloud.'
 const INTERVAL_MS = 60_000
 
-// Map the common Google API / auth failures to a plain-English next step.
 function friendlyError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err)
   const lc = raw.toLowerCase()
-  if (lc.includes('unable to parse range')) {
-    return 'Could not read the Items/Transactions tabs. Check that the spreadsheet ID is correct.'
-  }
-  if (lc.includes('permission') || lc.includes('forbidden') || lc.includes('403')) {
-    return 'Permission denied. Open the Sheet → Share, and add the service account email (shown in Settings) as an Editor.'
-  }
-  if (
-    lc.includes('has not been used') ||
-    lc.includes('accessnotconfigured') ||
-    lc.includes('service_disabled') ||
-    lc.includes('it is disabled')
-  ) {
-    return 'The Google Sheets API is not enabled for this project. Enable “Google Sheets API” in the Google Cloud Console, then try again.'
-  }
-  if (
-    lc.includes('requested entity was not found') ||
-    lc.includes('not found') ||
-    lc.includes('404')
-  ) {
-    return 'Spreadsheet not found. Double-check the spreadsheet ID — it is the part of the Sheet URL between /d/ and /edit.'
-  }
-  if (
-    lc.includes('invalid_grant') ||
-    lc.includes('invalid jwt') ||
-    lc.includes('decoder') ||
-    lc.includes('1e08010c') ||
-    lc.includes('err_ossl') ||
-    lc.includes('private key')
-  ) {
-    return 'The service account key looks malformed (or the system clock is wrong). Re-download the JSON key from Google Cloud and load it again in Settings.'
-  }
-  // AWS DynamoDB
   if (
     lc.includes('unrecognizedclient') ||
     lc.includes('invalidsignature') ||
@@ -61,7 +36,7 @@ function friendlyError(err: unknown): string {
     return 'AWS denied the request. The IAM user needs DynamoDB permissions (DescribeTable, CreateTable, Query, PutItem) on the table.'
   }
   if (lc.includes('resourcenotfound')) {
-    return 'The DynamoDB table was not found and could not be created. Create it manually or grant CreateTable permission.'
+    return 'The DynamoDB table was not found and could not be created. Create it or grant CreateTable permission.'
   }
   if (
     lc.includes('could not load credentials') ||
@@ -78,22 +53,27 @@ function friendlyError(err: unknown): string {
     lc.includes('network') ||
     lc.includes('socket')
   ) {
-    return 'Network problem reaching the server. Check your internet connection and press Sync now.'
+    return 'Network problem reaching AWS. Check your internet connection and press Sync now.'
   }
   return raw
 }
 
 let adapter: SyncAdapter | null = null
-let adapterSig = '' // detects credential/spreadsheet changes to rebuild the client
+let adapterSig = ''
 
-let state: SyncState = 'offline'
+let state: SyncState = 'local'
 let lastSyncedAt: string | null = null
-let message: string | undefined = UNCONFIGURED_MSG
+let message: string | undefined = LOCAL_MSG
 
 let syncing = false
 let intervalTimer: NodeJS.Timeout | null = null
 let debounceTimer: NodeJS.Timeout | null = null
 let notifier: ((status: SyncStatus) => void) | null = null
+
+// Conflicts awaiting the user's decision, and ids resolved this cycle (so the
+// re-sync after resolution doesn't immediately re-flag them).
+let currentConflicts: ConflictItem[] = []
+const recentlyResolved = new Set<string>()
 
 export function getStatus(): SyncStatus {
   return { state, lastSyncedAt, pending: queue.pendingCount(), message }
@@ -114,42 +94,21 @@ function setState(next: SyncState, msg?: string): void {
 }
 
 function buildAdapter(): SyncAdapter | null {
-  const backend = config.getBackend()
-
-  if (backend === 'dynamodb') {
-    const aws = config.getFullAwsConfig()
-    if (!aws) {
-      adapter = null
-      adapterSig = ''
-      return null
-    }
-    const sig = `dynamodb:${aws.region}:${aws.tableName}:${aws.accessKeyId}`
-    if (!adapter || adapterSig !== sig) {
-      adapter = new DynamoDbAdapter(aws)
-      adapterSig = sig
-    }
-    return adapter
-  }
-
-  // Default: Google Sheets
-  const keyJson = config.getKeyJson()
-  const spreadsheetId = config.getSpreadsheetId()
-  if (!keyJson || !spreadsheetId) {
+  const aws = config.getFullAwsConfig()
+  if (!aws) {
     adapter = null
     adapterSig = ''
     return null
   }
-  const sig = `sheets:${spreadsheetId}:${keyJson.length}`
+  const sig = `dynamodb:${aws.region}:${aws.tableName}:${aws.accessKeyId}`
   if (!adapter || adapterSig !== sig) {
-    adapter = new GoogleSheetsAdapter(keyJson, spreadsheetId)
+    adapter = new DynamoDbAdapter(aws)
     adapterSig = sig
   }
   return adapter
 }
 
-// Merge by newest updatedAt per id; the union keeps records present on only one
-// side. This is what lets multiple devices converge — whoever edited a record
-// most recently wins for it, independent of edits to other records.
+// Newest-updatedAt-per-id merge; union keeps records present on only one side.
 function mergeByUpdatedAt<T extends { id: string; updatedAt: string }>(
   remote: T[],
   local: T[]
@@ -174,19 +133,156 @@ function dedupeAndSort(txns: Transaction[]): Transaction[] {
   return out.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))
 }
 
+// -------------------------------------------------------------- conflict detection
+
+function normKey(i: { name: string; sku: string }): string {
+  return `${i.name.trim().toLowerCase()}|${i.sku.trim().toLowerCase()}`
+}
+
+function contentDiffers(a: Item, b: Item): boolean {
+  return (
+    a.name !== b.name ||
+    a.sku !== b.sku ||
+    a.category !== b.category ||
+    a.unit !== b.unit ||
+    a.reorderThreshold !== b.reorderThreshold ||
+    a.unitCost !== b.unitCost ||
+    (a.reorderUrl ?? '') !== (b.reorderUrl ?? '') ||
+    (a.supplier ?? '') !== (b.supplier ?? '') ||
+    (a.notes ?? '') !== (b.notes ?? '')
+  )
+}
+
+function changedSinceLastSync(updatedAt: string): boolean {
+  if (!lastSyncedAt) return false // first sync: don't flag divergence, only duplicates
+  return updatedAt > lastSyncedAt
+}
+
+function detectConflicts(remoteItems: Item[], localItems: Item[]): ConflictItem[] {
+  const remoteById = new Map(remoteItems.map((r) => [r.id, r]))
+  const remoteByKey = new Map<string, Item>()
+  for (const r of remoteItems) if (!r.deleted) remoteByKey.set(normKey(r), r)
+
+  const conflicts: ConflictItem[] = []
+  for (const l of localItems) {
+    if (l.deleted || recentlyResolved.has(l.id)) continue
+    const r = remoteById.get(l.id)
+    if (r) {
+      if (
+        !r.deleted &&
+        contentDiffers(l, r) &&
+        changedSinceLastSync(l.updatedAt) &&
+        changedSinceLastSync(r.updatedAt)
+      ) {
+        conflicts.push({
+          type: 'divergent',
+          local: l,
+          remote: r,
+          reason: 'Edited on this device and in the cloud since the last sync.'
+        })
+      }
+    } else {
+      const match = remoteByKey.get(normKey(l))
+      if (match && match.id !== l.id) {
+        conflicts.push({
+          type: 'duplicate',
+          local: l,
+          remote: match,
+          reason: 'Same name/SKU as an item already in the cloud.'
+        })
+      }
+    }
+  }
+  return conflicts
+}
+
+export function getConflicts(): ConflictItem[] {
+  return currentConflicts
+}
+
+export function resolveConflicts(resolutions: ConflictResolution[]): void {
+  for (const res of resolutions) {
+    const items = cache.readItems()
+    const localIdx = items.findIndex((i) => i.id === res.localId)
+    if (localIdx === -1) continue
+    const local = items[localIdx]
+    const conflict = currentConflicts.find(
+      (c) => c.local.id === res.localId && c.remote.id === res.remoteId
+    )
+
+    if (res.action === 'merge') {
+      // Fold local into remote: re-point ledger entries, drop the local item,
+      // recompute the remote item's quantity from the combined ledger.
+      const txns = cache.readTransactions()
+      for (const t of txns) if (t.itemId === res.localId) t.itemId = res.remoteId
+      cache.writeTransactions(txns)
+      queue.repointTransactions(res.localId, res.remoteId)
+
+      const next = items.filter((i) => i.id !== res.localId)
+      let remote = next.find((i) => i.id === res.remoteId)
+      if (!remote && conflict) {
+        remote = { ...conflict.remote }
+        next.push(remote)
+      }
+      if (remote) {
+        const sum = cache
+          .readTransactions()
+          .reduce((s, t) => s + (t.itemId === res.remoteId ? t.quantity : 0), 0)
+        remote.quantity = round2(sum)
+        remote.updatedAt = now()
+      }
+      cache.writeItems(next)
+    } else if (res.action === 'keepRemote') {
+      // Discard the local edit; adopt the cloud version.
+      if (conflict) {
+        items[localIdx] = { ...conflict.remote }
+        cache.writeItems(items)
+      }
+    } else {
+      // keepNew / keepLocal: local wins. Bump updatedAt so it pushes.
+      items[localIdx] = { ...local, updatedAt: now() }
+      cache.writeItems(items)
+    }
+
+    recentlyResolved.add(res.localId)
+    recentlyResolved.add(res.remoteId)
+  }
+
+  queue.markDirty('items')
+  currentConflicts = []
+  requestSync(0)
+}
+
+// -------------------------------------------------------------- sync
+
 export async function sync(): Promise<void> {
   if (syncing) return
+
+  if (config.getBackend() === 'local') {
+    setState('local', LOCAL_MSG)
+    return
+  }
   const a = buildAdapter()
   if (!a) {
     setState('offline', UNCONFIGURED_MSG)
     return
   }
+
   syncing = true
   setState('syncing', 'Syncing…')
   try {
     const pulled = await a.pull()
-    const pending = queue.getPendingTransactions()
 
+    // Before pushing local changes, look for clashes and pause for the user.
+    const conflicts = detectConflicts(pulled.items, cache.readItems())
+    if (conflicts.length > 0) {
+      currentConflicts = conflicts
+      const n = conflicts.length
+      setState('conflict', `${n} item conflict${n === 1 ? '' : 's'} need review before syncing.`)
+      return
+    }
+
+    const pending = queue.getPendingTransactions()
     const itemsDirty = queue.isDirty('items')
     const itemsVersion = queue.getVersion('items')
     const batchesDirty = queue.isDirty('batches')
@@ -198,7 +294,6 @@ export async function sync(): Promise<void> {
     const batches = mergeByUpdatedAt(pulled.batches, cache.readBatches())
     const templates = mergeByUpdatedAt(pulled.templates, cache.readTemplates())
 
-    // Transactions are append-only; the snapshot collections push per-collection.
     if (pending.length) {
       await a.appendTransactions(pending)
       queue.removeTransactions(pending.map((p) => p.id))
@@ -216,7 +311,6 @@ export async function sync(): Promise<void> {
       queue.clearDirtyIfUnchanged('templates', templatesVersion)
     }
 
-    // Re-merge from the freshest local state so edits made mid-sync survive.
     cache.writeItems(mergeByUpdatedAt(pulled.items, cache.readItems()))
     cache.writeBatches(mergeByUpdatedAt(pulled.batches, cache.readBatches()))
     cache.writeTemplates(mergeByUpdatedAt(pulled.templates, cache.readTemplates()))
@@ -225,6 +319,8 @@ export async function sync(): Promise<void> {
     )
 
     lastSyncedAt = new Date().toISOString()
+    recentlyResolved.clear()
+    currentConflicts = []
     setState('synced', undefined)
   } catch (err) {
     console.error('[sync] failed:', err instanceof Error ? err.message : String(err))
@@ -234,9 +330,18 @@ export async function sync(): Promise<void> {
   }
 }
 
-// Used by the Settings "Test connection" button: build the client and do a real
-// round-trip so the user sees the exact problem (and the tabs get created).
+export function requestSync(delayMs = 1500): void {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null
+    void sync()
+  }, delayMs)
+}
+
 export async function testConnection(): Promise<{ ok: boolean; error?: string }> {
+  if (config.getBackend() === 'local') {
+    return { ok: false, error: 'Currently in Local-only mode. Switch to AWS DynamoDB to connect.' }
+  }
   const a = buildAdapter()
   if (!a) return { ok: false, error: UNCONFIGURED_MSG }
   try {
@@ -248,15 +353,6 @@ export async function testConnection(): Promise<{ ok: boolean; error?: string }>
   }
 }
 
-// Debounced: rapid consume/restock clicks coalesce into one sync.
-export function requestSync(delayMs = 1500): void {
-  if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => {
-    debounceTimer = null
-    void sync()
-  }, delayMs)
-}
-
 export function reconfigure(): void {
   adapter = null
   adapterSig = ''
@@ -264,7 +360,7 @@ export function reconfigure(): void {
 }
 
 export function start(): void {
-  void sync() // pull-on-start, then flush anything pending
+  void sync()
   if (intervalTimer) clearInterval(intervalTimer)
   intervalTimer = setInterval(() => void sync(), INTERVAL_MS)
 }

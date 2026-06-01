@@ -2,16 +2,17 @@
 
 [![CI](https://github.com/pilotbyte-saas/pb-inventory-students/actions/workflows/ci.yml/badge.svg)](https://github.com/pilotbyte-saas/pb-inventory-students/actions/workflows/ci.yml)
 
-A single-device, local-first Electron app for tracking classroom consumables
-(name tags, pens, t-shirts, …). It reads and writes a local JSON cache instantly
-and syncs to a **Google Sheet** whenever it is connected. Losing connection is a
-non-event: changes queue locally and flush on reconnect.
+A local-first Electron app for tracking classroom consumables (name tags, pens,
+t-shirts, …). It reads and writes a local JSON cache instantly and syncs to
+**AWS DynamoDB** when you're online. Losing connection is a non-event: changes
+queue locally and flush on reconnect.
 
 - **Renderer:** React + Tailwind + Recharts
-- **Main:** pluggable sync backend — **Google Sheets** (googleapis) or **AWS
-  DynamoDB** (`@aws-sdk`) — with the credential encrypted via Electron `safeStorage`
+- **Main:** AWS DynamoDB sync (`@aws-sdk`), with the credential encrypted via
+  Electron `safeStorage`
 - **Cache:** plain JSON files in the app `userData` directory
-- **Build:** electron-vite + electron-builder (Windows + macOS), auto-update via electron-updater
+- **Build:** electron-vite + electron-builder (Windows + macOS), auto-update via
+  electron-updater
 
 ---
 
@@ -23,64 +24,25 @@ Get the latest installer from the
 - **Windows:** `Classroom.Inventory.Setup.<version>.exe`
 - **macOS (Apple Silicon):** `Classroom.Inventory-<version>-arm64.dmg`
 
-The app updates itself afterward — new releases install automatically on restart.
-First launch is unsigned: on macOS use **right-click → Open**; on Windows click
-**More info → Run anyway** at the SmartScreen prompt.
+The app updates itself afterward — new releases install on restart. First launch
+is unsigned: on macOS use **right-click → Open**; on Windows click **More info →
+Run anyway** at the SmartScreen prompt.
 
 ---
 
-## Phase 0 — one-time Google setup (do this first)
+## Sync modes
 
-This gates syncing. The app still runs and tracks inventory locally without it,
-but it won't sync until these steps are done.
+Choose in **Settings → Sync mode**:
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), create a
-   project, e.g. `classroom-inventory`.
-2. **APIs & Services → Library →** enable **Google Sheets API**.
-3. **APIs & Services → Credentials → Create credentials → Service account.**
-   Give it a name and create it.
-4. Open the service account → **Keys → Add key → Create new key → JSON** and
-   download the file. **This is your key. Keep it private and out of version
-   control.**
-5. Create a Google Sheet. A **blank one is fine** — on first sync the app creates
-   the `Items` and `Transactions` tabs and their header rows for you.
-6. Copy the service account email (`name@project-id.iam.gserviceaccount.com`).
-   In the Sheet, click **Share** and add that email as an **Editor**.
-7. Copy the spreadsheet ID from the URL (the long string between `/d/` and
-   `/edit`).
+- **Local only** — nothing leaves the device; every change is saved locally.
+  Great when you're offline.
+- **AWS DynamoDB** — syncs to a shared cloud table. Multiple devices can use the
+  same table. Local-first still applies: edits are instant and flush when online.
 
-In the app, open **Settings**, load the JSON key with the file picker, and paste
-the spreadsheet ID. The key is encrypted with the OS keychain (`safeStorage`)
-and stored in `userData` — it never lives in this project folder.
+Switching from **Local only** to **AWS DynamoDB** (a "go-live" sync) pushes your
+accumulated changes up — see [Conflicts](#conflicts-on-go-live) below.
 
-### Sheet headers (created automatically)
-
-The app writes these header rows itself on first sync; they're listed here only
-for reference if you want to read or edit the Sheet directly.
-
-`Items` tab, row 1:
-
-```
-id | name | sku | category | unit | quantity | reorderThreshold | unitCost | reorderUrl | supplier | notes | createdAt | updatedAt
-```
-
-`Transactions` tab, row 1 (append-only):
-
-```
-id | itemId | type | quantity | unitCost | totalCost | receiptRef | note | timestamp
-```
-
-`type` is one of `initial`, `receive`, `consume`, `adjust`. `quantity` is signed
-(positive for receive, negative for consume).
-
----
-
-## Using AWS DynamoDB (multiple devices)
-
-For a few devices sharing one live dataset, switch in **Settings → Sync backend →
-AWS DynamoDB**. Every device points at the same table; conflicts are resolved per
-item (newest edit wins) and transactions are append-only, so devices never
-clobber each other. The local-first cache and queue work exactly the same.
+### Setting up AWS DynamoDB
 
 1. In AWS **IAM**, create a user with programmatic access and attach a policy
    scoped to your table (rename the table in the ARN if you change it):
@@ -103,12 +65,40 @@ clobber each other. The local-first cache and queue work exactly the same.
    }
    ```
 
-2. In **Settings**, enter the Access Key ID, Secret Access Key, region (e.g.
-   `us-east-1`), and table name (default `classroom-inventory`), then click
-   **Test connection**. The table is created automatically on first connect
-   (on-demand / pay-per-request billing — effectively pennies at this volume).
+2. In **Settings → AWS DynamoDB**, enter the Access Key ID, Secret Access Key,
+   region (e.g. `us-east-1`), and table name (default `classroom-inventory`),
+   then click **Test connection**. The table is created automatically on first
+   connect (on-demand / pay-per-request — effectively pennies at this volume).
 
-Use the **same** access key + region + table name on each device.
+Use the **same** access key + region + table name on each device. The secret is
+encrypted with the OS keychain and never leaves `userData`.
+
+---
+
+## Deleting items
+
+In **Inventory**, each row has a **Delete** action (with a confirmation). Delete
+is a **soft-delete**: the item is hidden and stops counting toward any total, but
+it's kept in DynamoDB marked `deleted` (with a timestamp) and a `delete` entry is
+written to the ledger — so you keep a full audit trail and the item could be
+restored. It never affects live counts once deleted.
+
+---
+
+## Conflicts on go-live
+
+When local changes sync up to the cloud, the app compares your items against
+what's already there. If something clashes, the sync **pauses and shows a
+resolution dialog** instead of silently overwriting:
+
+- **Duplicate** — a local item matches an existing cloud item by name/SKU (e.g.
+  the same thing was created on two devices). Choose **Merge** (fold into the
+  cloud item; its ledger entries are re-pointed and the quantity recomputed) or
+  **Keep as new** (push it as a separate item).
+- **Divergent edit** — the same item was edited on this device and in the cloud
+  since the last sync. Choose **Keep mine** or **Keep cloud**.
+
+Resolve each, click **Apply & sync**, and the push finishes.
 
 ---
 
@@ -116,7 +106,7 @@ Use the **same** access key + region + table name on each device.
 
 ```bash
 npm install
-npm run dev          # launches the app with hot reload
+npm run dev          # launch with hot reload
 ```
 
 Other scripts:
@@ -130,67 +120,45 @@ npm run build:mac    # macOS Apple Silicon (.dmg + .zip)
 npm run icons        # regenerate app icons from build/icon.svg
 ```
 
-The app works fully offline. Go to **Settings** to connect Google Sheets when
+The app works fully offline — open **Settings** to connect AWS DynamoDB when
 you're ready.
 
 ---
 
-## Connecting & troubleshooting sync
+## Troubleshooting sync
 
-Pick the backend in **Settings → Sync backend**, fill in its credentials, then
-click **Test connection** — it does a real round-trip and reports exactly what's
-wrong. Common causes:
-
-**Google Sheets**
-
-| Message | Fix |
-| --- | --- |
-| Permission denied | Share the Sheet with the service-account email (shown in Settings) as **Editor**. |
-| Sheets API not enabled | Enable **Google Sheets API** for the project in the Cloud Console. |
-| Spreadsheet not found | Re-check the ID — the part of the URL between `/d/` and `/edit`. |
-| Key looks malformed | Re-download the JSON key and load it as-is; don't reformat it. |
-
-**AWS DynamoDB**
+In **Settings → AWS DynamoDB**, click **Test connection** — it does a real
+round-trip and reports exactly what's wrong.
 
 | Message | Fix |
 | --- | --- |
 | AWS rejected the credentials | Re-check the Access Key ID and Secret Access Key. |
 | AWS denied the request | Attach the IAM policy above (DescribeTable, CreateTable, Query, PutItem). |
 | Table not found / can't create | Grant `CreateTable`, or pre-create a table with keys `pk` (S) + `sk` (S). |
-
-You can also verify **Google** access from the terminal without launching the app:
-
-```bash
-npm run check:sheets -- "C:\path\to\key.json" "<spreadsheetId>"
-```
+| Network problem | Check your connection and press **Sync now**. |
 
 ---
 
 ## Continuous integration & releases
 
 - **CI** (`.github/workflows/ci.yml`): every push / PR to `main` runs typecheck
-  and builds all three bundles.
+  and builds all bundles.
 - **Release** (`.github/workflows/release.yml`): pushing a `v*` tag builds
   installers for **Windows** (NSIS `.exe`) and **macOS Apple Silicon**
-  (`.dmg` + `.zip`) on GitHub-hosted runners.
+  (`.dmg` + `.zip`), uploads them as workflow artifacts, and publishes them to
+  this repo's **Releases** (which powers in-app auto-update).
 
   ```bash
   npm version patch        # bumps package.json and creates a v* tag
   git push --follow-tags   # triggers the release build
   ```
 
-  Installers are always uploaded as **workflow artifacts** (download them from
-  the Actions run page). If the `RELEASES_TOKEN` secret is set, they are also
-  **published to the public releases repo**, which is what powers in-app
-  auto-update.
-
 ### Auto-update
 
 This repo is **public**, so updates are served straight from its **GitHub
 Releases** and the installed app needs no token. CI publishes with the built-in
-`GITHUB_TOKEN` — nothing to configure. Push a tag and installed apps check for
-the new version, download it in the background, and install on restart (or
-automatically on next quit).
+`GITHUB_TOKEN`. Push a tag and installed apps download the new version in the
+background and install on restart (or automatically on next quit).
 
 ### App icon
 
@@ -204,16 +172,18 @@ automatically on next quit).
 - **macOS:** without an Apple Developer ID the `.dmg` is unsigned — open it the
   first time with right-click → **Open** (or `xattr -cr` the app). **macOS
   auto-update requires signing + notarization**; add `MAC_CSC_LINK` and
-  `MAC_CSC_KEY_PASSWORD` secrets to enable it (the workflow already passes them
-  through when present).
+  `MAC_CSC_KEY_PASSWORD` secrets to enable it (the release workflow uses them
+  when present).
 
 ---
 
-## Notes & gotchas
+## Data model & gotchas
 
-- Sheets API quota is ~60 reads or writes per minute. Batching keeps us far
-  under it at classroom volume.
-- Don't hand-edit the Sheet while the app has unsynced offline changes. On sync
-  the app pulls first, then your local edits win for any shared item id.
-- Receipts: store the image in a Drive folder shared with the service account
-  and keep the link in `receiptRef`, or just record the amount and a note.
+- **Items** are a current-state snapshot (merged newest-edit-wins per id, except
+  when a conflict is flagged). **Transactions** are an append-only ledger —
+  `initial`, `receive`, `consume`, `adjust`, `delete`.
+- Stock is always reconcilable from the ledger (**Settings → Recompute
+  quantities from ledger**). Deleted items are excluded.
+- DynamoDB on-demand billing is pennies at classroom volume; batched reads/writes
+  keep request counts low.
+- Round every number that reaches the screen — float math leaks artifacts.

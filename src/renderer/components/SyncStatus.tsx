@@ -6,14 +6,18 @@ const DOT: Record<SyncState, string> = {
   synced: 'bg-emerald-400',
   syncing: 'bg-sky-400 animate-pulse',
   offline: 'bg-slate-400',
-  error: 'bg-red-400'
+  error: 'bg-red-400',
+  local: 'bg-indigo-400',
+  conflict: 'bg-amber-400 animate-pulse'
 }
 
 const LABEL: Record<SyncState, string> = {
   synced: 'Synced',
   syncing: 'Syncing…',
   offline: 'Offline',
-  error: 'Sync error'
+  error: 'Sync error',
+  local: 'Local only',
+  conflict: 'Action needed'
 }
 
 export function SyncStatusPanel(): JSX.Element {

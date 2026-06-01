@@ -1,7 +1,7 @@
 {
   "name": "classroom-inventory",
   "version": "1.0.0",
-  "description": "Local-first classroom consumables inventory, synced to Google Sheets.",
+  "description": "Local-first classroom consumables inventory with AWS DynamoDB cloud sync.",
   "author": "PilotByte",
   "private": true,
   "type": "commonjs",
@@ -17,14 +17,12 @@
     "build:win": "electron-vite build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac --arm64",
     "build:dir": "electron-vite build && electron-builder --dir",
-    "check:sheets": "node scripts/check-sheets.mjs",
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1057.0",
     "@aws-sdk/lib-dynamodb": "^3.1057.0",
     "electron-updater": "^6.8.3",
-    "googleapis": "^144.0.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "nanoid": "^3.3.7",

@@ -2,7 +2,7 @@
 // These are type-only declarations (erased at build time), so the file can be
 // imported from both the Node side and the browser side safely.
 
-export type TransactionType = 'initial' | 'receive' | 'consume' | 'adjust'
+export type TransactionType = 'initial' | 'receive' | 'consume' | 'adjust' | 'delete'
 
 export interface Item {
   id: string // stable id, e.g. "tshirt-blk-l"
@@ -16,6 +16,8 @@ export interface Item {
   reorderUrl?: string
   supplier?: string
   notes?: string
+  deleted?: boolean // soft-delete tombstone: hidden from inventory + excluded from counts
+  deletedAt?: string // ISO, when it was deleted (audit)
   createdAt: string // ISO
   updatedAt: string // ISO
 }
@@ -90,7 +92,7 @@ export interface Template {
   updatedAt: string
 }
 
-export type SyncState = 'synced' | 'syncing' | 'offline' | 'error'
+export type SyncState = 'synced' | 'syncing' | 'offline' | 'error' | 'local' | 'conflict'
 
 export interface SyncStatus {
   state: SyncState
@@ -113,7 +115,7 @@ export interface TransactionFilter {
   to?: string // 'YYYY-MM-DD'
 }
 
-export type SyncBackend = 'sheets' | 'dynamodb'
+export type SyncBackend = 'dynamodb' | 'local'
 
 export interface AwsConfig {
   accessKeyId: string
@@ -127,11 +129,6 @@ export interface AwsConfig {
 export interface BackendInfo {
   backend: SyncBackend
   encryptionAvailable: boolean
-  sheets: {
-    hasKey: boolean
-    clientEmail: string | null
-    spreadsheetId: string | null
-  }
   aws: {
     hasSecret: boolean
     accessKeyId: string | null
@@ -140,12 +137,33 @@ export interface BackendInfo {
   }
 }
 
+export type ConflictType = 'duplicate' | 'divergent'
+
+// A clash found while syncing local changes up to the cloud.
+//  - duplicate: a local-only item matches an existing cloud item by name/SKU
+//  - divergent: the same item id was edited both locally and in the cloud
+export interface ConflictItem {
+  type: ConflictType
+  local: Item
+  remote: Item
+  reason: string
+}
+
+export type ConflictAction = 'merge' | 'keepNew' | 'keepLocal' | 'keepRemote'
+
+export interface ConflictResolution {
+  localId: string
+  remoteId: string
+  action: ConflictAction
+}
+
 // The surface exposed on `window.api` by the preload bridge.
 export interface IpcApi {
   getItems(): Promise<Item[]>
   getTransactions(filter?: TransactionFilter): Promise<Transaction[]>
   addItem(item: NewItemInput): Promise<void>
   updateItem(id: string, patch: Partial<Item>): Promise<void>
+  deleteItem(id: string): Promise<void>
   consume(itemId: string, qty: number, note?: string): Promise<void>
   receive(
     itemId: string,
@@ -182,11 +200,12 @@ export interface IpcApi {
   hasCredentials(): Promise<boolean>
   getBackendInfo(): Promise<BackendInfo>
   setBackend(backend: SyncBackend): Promise<void>
-  setCredentials(jsonKey: string): Promise<void>
-  setSpreadsheetId(id: string): Promise<void>
   setAwsConfig(config: AwsConfig): Promise<void>
-  pickKeyFile(): Promise<{ ok: boolean; clientEmail?: string | null; error?: string }>
   openExternal(url: string): Promise<void>
+
+  // Conflict resolution (local → cloud sync)
+  getConflicts(): Promise<ConflictItem[]>
+  resolveConflicts(resolutions: ConflictResolution[]): Promise<void>
 
   // App version & auto-update
   getAppVersion(): Promise<string>

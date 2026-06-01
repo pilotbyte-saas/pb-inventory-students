@@ -1,8 +1,9 @@
 import { app, ipcMain, dialog, shell, BrowserWindow } from 'electron'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import type {
   AwsConfig,
   BatchLine,
+  ConflictResolution,
   Item,
   NewBatchInput,
   NewItemInput,
@@ -27,6 +28,7 @@ export function registerIpc(): void {
   ipcMain.handle('item:update', (_e, id: string, patch: Partial<Item>) =>
     inventory.updateItem(id, patch)
   )
+  ipcMain.handle('item:delete', (_e, id: string) => inventory.deleteItem(id))
 
   ipcMain.handle('inv:consume', (_e, itemId: string, qty: number, note?: string) =>
     inventory.consume(itemId, qty, note)
@@ -78,6 +80,10 @@ export function registerIpc(): void {
   ipcMain.handle('sync:status', () => manager.getStatus())
   ipcMain.handle('sync:now', () => manager.sync())
   ipcMain.handle('sync:test', () => manager.testConnection())
+  ipcMain.handle('sync:conflicts', () => manager.getConflicts())
+  ipcMain.handle('sync:resolve', (_e, resolutions: ConflictResolution[]) =>
+    manager.resolveConflicts(resolutions)
+  )
 
   ipcMain.handle('cred:has', () => config.hasCredentials())
   ipcMain.handle('cred:info', () => config.getBackendInfo())
@@ -85,34 +91,9 @@ export function registerIpc(): void {
     config.setBackend(backend)
     manager.reconfigure()
   })
-  ipcMain.handle('cred:set', (_e, jsonKey: string) => {
-    config.setCredentials(jsonKey)
-    manager.reconfigure()
-  })
-  ipcMain.handle('cred:setSpreadsheet', (_e, id: string) => {
-    config.setSpreadsheetId(id)
-    manager.reconfigure()
-  })
   ipcMain.handle('cred:setAws', (_e, cfg: AwsConfig) => {
     config.setAwsConfig(cfg)
     manager.reconfigure()
-  })
-  ipcMain.handle('cred:pickKey', async () => {
-    const win = BrowserWindow.getFocusedWindow() ?? undefined
-    const res = await dialog.showOpenDialog(win!, {
-      title: 'Select service account JSON key',
-      filters: [{ name: 'JSON', extensions: ['json'] }],
-      properties: ['openFile']
-    })
-    if (res.canceled || !res.filePaths[0]) return { ok: false }
-    try {
-      const txt = readFileSync(res.filePaths[0], 'utf8')
-      config.setCredentials(txt) // validates JSON shape, then encrypts + stores
-      manager.reconfigure()
-      return { ok: true, clientEmail: config.getClientEmail() }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
   })
 
   ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))

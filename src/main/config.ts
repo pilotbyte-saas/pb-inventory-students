@@ -3,9 +3,9 @@ import { join } from 'node:path'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { AwsConfig, BackendInfo, SyncBackend } from '@shared/types'
 
-// Persists which sync backend is active plus each backend's credentials.
-// Secrets (the service-account key, the AWS secret access key) are encrypted
-// with the OS keychain via safeStorage and never leave the userData directory.
+// Persists which sync backend is active plus the AWS credentials. The secret
+// access key is encrypted with the OS keychain via safeStorage and never leaves
+// the userData directory.
 
 interface StoredSecret {
   enc: boolean // true if encrypted with safeStorage
@@ -14,10 +14,6 @@ interface StoredSecret {
 
 interface StoredConfig {
   backend?: SyncBackend
-  // Google Sheets
-  key?: StoredSecret
-  spreadsheetId?: string
-  // AWS DynamoDB
   aws?: {
     accessKeyId?: string
     region?: string
@@ -55,7 +51,6 @@ function encryptSecret(plain: string): StoredSecret {
   if (safeStorage.isEncryptionAvailable()) {
     return { enc: true, data: safeStorage.encryptString(plain).toString('base64') }
   }
-  // Fallback where the OS keychain is unavailable (still works, not encrypted).
   return { enc: false, data: Buffer.from(plain, 'utf8').toString('base64') }
 }
 
@@ -68,8 +63,9 @@ export function encryptionAvailable(): boolean {
   return safeStorage.isEncryptionAvailable()
 }
 
+// Default to local-only so a fresh install works offline with no setup.
 export function getBackend(): SyncBackend {
-  return load().backend ?? 'sheets'
+  return load().backend ?? 'local'
 }
 
 export function setBackend(backend: SyncBackend): void {
@@ -78,58 +74,6 @@ export function setBackend(backend: SyncBackend): void {
   save(c)
 }
 
-// ---------------------------------------------------------------- Google Sheets
-
-export function setCredentials(jsonKey: string): void {
-  let parsed: { client_email?: unknown; private_key?: unknown }
-  try {
-    parsed = JSON.parse(jsonKey)
-  } catch {
-    throw new Error('The selected file is not valid JSON.')
-  }
-  if (typeof parsed.client_email !== 'string' || typeof parsed.private_key !== 'string') {
-    throw new Error(
-      'That file does not look like a service account key (missing client_email/private_key).'
-    )
-  }
-  const c = load()
-  c.key = encryptSecret(jsonKey)
-  save(c)
-}
-
-export function getKeyJson(): string | null {
-  const c = load()
-  return c.key ? decryptSecret(c.key) : null
-}
-
-export function getClientEmail(): string | null {
-  try {
-    const key = getKeyJson()
-    if (!key) return null
-    const parsed = JSON.parse(key) as { client_email?: unknown }
-    return typeof parsed.client_email === 'string' ? parsed.client_email : null
-  } catch {
-    return null
-  }
-}
-
-export function setSpreadsheetId(id: string): void {
-  const c = load()
-  c.spreadsheetId = id.trim()
-  save(c)
-}
-
-export function getSpreadsheetId(): string | null {
-  return load().spreadsheetId ?? null
-}
-
-export function hasSheets(): boolean {
-  const c = load()
-  return !!c.key && !!c.spreadsheetId
-}
-
-// ---------------------------------------------------------------- AWS DynamoDB
-
 export function setAwsConfig(cfg: AwsConfig): void {
   const c = load()
   const prev = c.aws ?? {}
@@ -137,8 +81,7 @@ export function setAwsConfig(cfg: AwsConfig): void {
     accessKeyId: cfg.accessKeyId.trim(),
     region: cfg.region.trim(),
     tableName: cfg.tableName.trim(),
-    // Keep the existing secret if the user left the field blank (e.g. just
-    // changing the region or table name).
+    // Keep the existing secret if the field was left blank (e.g. changing region).
     secret: cfg.secretAccessKey ? encryptSecret(cfg.secretAccessKey) : prev.secret
   }
   save(c)
@@ -160,22 +103,16 @@ export function hasAws(): boolean {
   return !!(a?.accessKeyId && a.region && a.tableName && a.secret)
 }
 
-// ---------------------------------------------------------------- backend-aware
-
+// "Configured" means: local needs nothing; dynamodb needs AWS creds.
 export function hasCredentials(): boolean {
-  return getBackend() === 'dynamodb' ? hasAws() : hasSheets()
+  return getBackend() === 'dynamodb' ? hasAws() : true
 }
 
 export function getBackendInfo(): BackendInfo {
   const c = load()
   return {
-    backend: c.backend ?? 'sheets',
+    backend: c.backend ?? 'local',
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
-    sheets: {
-      hasKey: !!c.key,
-      clientEmail: getClientEmail(),
-      spreadsheetId: c.spreadsheetId ?? null
-    },
     aws: {
       hasSecret: !!c.aws?.secret,
       accessKeyId: c.aws?.accessKeyId ?? null,

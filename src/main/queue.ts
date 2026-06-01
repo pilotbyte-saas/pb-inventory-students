@@ -81,6 +81,20 @@ export function removeTransactions(ids: string[]): void {
   save(d)
 }
 
+// Re-point pending transactions from one item id to another (used when merging
+// a duplicate item into an existing one).
+export function repointTransactions(fromItemId: string, toItemId: string): void {
+  const d = load()
+  let changed = false
+  for (const t of d.transactions) {
+    if (t.itemId === fromItemId) {
+      t.itemId = toItemId
+      changed = true
+    }
+  }
+  if (changed) save(d)
+}
+
 export function markDirty(collection: string): void {
   const d = load()
   const s = stateFor(d, collection)

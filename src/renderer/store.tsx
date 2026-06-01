@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import type {
   Batch,
   BatchLine,
+  ConflictItem,
+  ConflictResolution,
   Item,
   NewBatchInput,
   NewItemInput,
@@ -20,11 +22,13 @@ interface DataContextValue {
   transactions: Transaction[]
   batches: Batch[]
   templates: Template[]
+  conflicts: ConflictItem[]
   sync: SyncStatus
   ready: boolean
   refresh: () => Promise<void>
   addItem: (input: NewItemInput) => Promise<void>
   updateItem: (id: string, patch: Partial<Item>) => Promise<void>
+  deleteItem: (id: string) => Promise<void>
   consume: (itemId: string, qty: number, note?: string) => Promise<void>
   receive: (
     itemId: string,
@@ -43,6 +47,7 @@ interface DataContextValue {
   saveTemplate: (name: string, lines: BatchLine[]) => Promise<void>
   updateTemplate: (id: string, patch: TemplatePatch) => Promise<void>
   deleteTemplate: (id: string) => Promise<void>
+  resolveConflicts: (resolutions: ConflictResolution[]) => Promise<void>
 }
 
 const DataContext = createContext<DataContextValue | null>(null)
@@ -52,7 +57,8 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [batches, setBatches] = useState<Batch[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
-  const [sync, setSync] = useState<SyncStatus>({ state: 'offline', lastSyncedAt: null, pending: 0 })
+  const [conflicts, setConflicts] = useState<ConflictItem[]>([])
+  const [sync, setSync] = useState<SyncStatus>({ state: 'local', lastSyncedAt: null, pending: 0 })
   const [ready, setReady] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -68,6 +74,7 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
     setBatches(b)
     setTemplates(tpl)
     setSync(s)
+    setConflicts(s.state === 'conflict' ? await api.getConflicts() : [])
     setReady(true)
   }, [])
 
@@ -75,6 +82,8 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
     void refresh()
     const off = api.onSyncStatus((s) => {
       setSync(s)
+      if (s.state === 'conflict') void api.getConflicts().then(setConflicts)
+      else setConflicts([])
       if (s.state === 'synced') void refresh()
     })
     const onOnline = (): void => void api.syncNow()
@@ -95,6 +104,13 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
   const updateItem = useCallback(
     async (id: string, patch: Partial<Item>) => {
       await api.updateItem(id, patch)
+      await refresh()
+    },
+    [refresh]
+  )
+  const deleteItem = useCallback(
+    async (id: string) => {
+      await api.deleteItem(id)
       await refresh()
     },
     [refresh]
@@ -177,6 +193,13 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
     },
     [refresh]
   )
+  const resolveConflicts = useCallback(
+    async (resolutions: ConflictResolution[]) => {
+      await api.resolveConflicts(resolutions)
+      await refresh()
+    },
+    [refresh]
+  )
 
   const value = useMemo<DataContextValue>(
     () => ({
@@ -184,11 +207,13 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
       transactions,
       batches,
       templates,
+      conflicts,
       sync,
       ready,
       refresh,
       addItem,
       updateItem,
+      deleteItem,
       consume,
       receive,
       adjust,
@@ -200,18 +225,21 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
       reverseTransaction,
       saveTemplate,
       updateTemplate,
-      deleteTemplate
+      deleteTemplate,
+      resolveConflicts
     }),
     [
       items,
       transactions,
       batches,
       templates,
+      conflicts,
       sync,
       ready,
       refresh,
       addItem,
       updateItem,
+      deleteItem,
       consume,
       receive,
       adjust,
@@ -223,7 +251,8 @@ export function DataProvider({ children }: { children: ReactNode }): JSX.Element
       reverseTransaction,
       saveTemplate,
       updateTemplate,
-      deleteTemplate
+      deleteTemplate,
+      resolveConflicts
     ]
   )
 

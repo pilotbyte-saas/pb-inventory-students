@@ -8,7 +8,8 @@ const TYPE_LABEL: Record<TransactionType, string> = {
   initial: 'Initial',
   receive: 'Restock',
   consume: 'Consume',
-  adjust: 'Adjust'
+  adjust: 'Adjust',
+  delete: 'Deleted'
 }
 
 export default function Dashboard({ onNavigate }: { onNavigate: (v: View) => void }): JSX.Element {

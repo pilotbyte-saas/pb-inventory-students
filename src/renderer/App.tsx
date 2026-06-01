@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useData } from './store'
 import { api } from './api'
 import { SyncStatusPanel } from './components/SyncStatus'
+import { ConflictModal } from './components/ConflictModal'
 import Dashboard from './views/Dashboard'
 import Inventory from './views/Inventory'
 import Consume from './views/Consume'
@@ -73,7 +74,7 @@ export default function App(): JSX.Element {
       <main className="flex-1 overflow-auto">
         {!configured && view !== 'settings' && (
           <div className="flex items-center justify-between bg-amber-100 px-6 py-2 text-sm text-amber-900">
-            <span>Google Sheets isn&apos;t connected yet — changes are saved locally only.</span>
+            <span>Cloud sync isn&apos;t configured — add your AWS keys to sync, or stay local.</span>
             <button className="font-medium underline" onClick={() => setView('settings')}>
               Open Settings
             </button>
@@ -90,6 +91,7 @@ export default function App(): JSX.Element {
           {view === 'settings' && <Settings />}
         </div>
       </main>
+      <ConflictModal />
     </div>
   )
 }
