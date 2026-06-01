@@ -1,6 +1,6 @@
 {
   "name": "classroom-inventory",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local-first classroom consumables inventory with AWS DynamoDB cloud sync.",
   "author": "PilotByte",
   "private": true,
